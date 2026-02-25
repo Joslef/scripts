@@ -1,0 +1,351 @@
+#!/bin/bash
+
+set -uo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+ITALIC='\033[3m'
+NC='\033[0m'
+
+PINK='\033[38;5;198m'
+BRIGHT_PINK='\033[38;5;201m'
+HOT_PINK='\033[38;5;205m'
+
+# Abort cleanly on Ctrl+C: kill all subshells in this process group, then exit
+trap 'trap "" TERM; printf "\r\033[2K${BLUE}===${NC} ${RED}Aborted${NC} ${BLUE}===${NC}\n\033[2K\033[?25h\n"; kill -- -$$ 2>/dev/null; exit 130' INT
+
+# Filter mode: 0 = show all repos, 1 = show dirty only
+SHOW_DIRTY_ONLY=0
+
+print_header() {
+  echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_error() {
+  echo -e "${RED}✗ $1${NC}"
+}
+
+# Spinner animation function
+spinner() {
+  local pid=$1
+  local delay=0.1
+  local spinner_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local i=0
+
+  while kill -0 $pid 2>/dev/null; do
+    printf "\r${BRIGHT_PINK}${spinner_chars[$((i % ${#spinner_chars[@]}))]}\033[0m"
+    i=$((i + 1))
+    sleep $delay
+  done
+  printf "\r \r"  # Clear the spinner
+}
+
+print_banner() {
+  echo -e "${PINK}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${BRIGHT_PINK} *"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK} ██████╗ ██╗████████╗${NC}                                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔════╝ ██║╚══██╔══╝${NC}                                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██║  ███╗██║   ██║${NC}                                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██║   ██║██║   ██║${NC}                                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚██████╔╝██║   ██║${NC}                                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK} ╚═════╝ ╚═╝   ╚═╝${NC}                                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗████████╗ █████╗ ████████╗██╗   ██╗███████╗${NC}  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔════╝╚══██╔══╝██╔══██╗╚══██╔══╝██║   ██║██╔════╝${NC}  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗   ██║   ███████║   ██║   ██║   ██║███████╗${NC}  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚════██║   ██║   ██╔══██║   ██║   ██║   ██║╚════██║${NC}  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████║   ██║   ██║  ██║   ██║   ╚██████╔╝███████║${NC}  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚══════╝   ╚═╝   ╚═╝  ╚═╝   ╚═╝    ╚═════╝╚══════╝${NC}   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${BRIGHT_PINK} *${NC}"
+  echo ""
+}
+
+# Scan and report git repo status; prints results, returns 0 if all clean
+scan_repos() {
+  local search_dir
+  search_dir="$(cd "$1" && pwd)"
+
+  local tmpfile countsfile
+  tmpfile=$(mktemp)
+  countsfile=$(mktemp)
+  echo "0 0 0" > "$countsfile"
+
+  local spinner_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  printf "\033[?25l"  # hide cursor during scan
+
+  # Spinner updates the scanning line in-place; hint stays on the line below
+  (
+    local i=0
+    while true; do
+      printf "\r${BLUE}=== Scanning: $search_dir ${BRIGHT_PINK}${spinner_chars[$((i % ${#spinner_chars[@]}))]}\033[0m${BLUE} ===${NC}\n  ${YELLOW}Ctrl+C to abort${NC}\033[1A"
+      i=$((i + 1))
+      sleep 0.1
+    done
+  ) &
+  local spinner_pid=$!
+
+  # Run the scan in a background subshell.
+  # stdin is closed (/dev/null) so git processes cannot steal terminal input.
+  (
+    local _total=0 _dirty=0 _clean=0
+    while IFS= read -r gitdir; do
+      local repo_dir mod issues
+      repo_dir=$(dirname "$gitdir")
+      _total=$((_total + 1))
+      mod=0
+      issues=""
+
+      git -C "$repo_dir" fetch --quiet 2>/dev/null || true
+      local status_out
+      status_out=$(git -C "$repo_dir" status 2>/dev/null)
+
+      if echo "$status_out" | grep -q "modified:";            then mod=1; issues="${issues}  ${RED}✗ Modified files${NC}\n"; fi
+      if echo "$status_out" | grep -q "Untracked files:";     then mod=1; issues="${issues}  ${RED}✗ Untracked files${NC}\n"; fi
+      if echo "$status_out" | grep -q "Your branch is ahead"; then mod=1; issues="${issues}  ${RED}✗ Unpushed commits${NC}\n"; fi
+      if echo "$status_out" | grep -q "Your branch is behind";then mod=1; issues="${issues}  ${YELLOW}⚠ Behind remote (pull needed)${NC}\n"; fi
+      if echo "$status_out" | grep -q "Changes to be committed:"; then mod=1; issues="${issues}  ${YELLOW}⚠ Staged but uncommitted changes${NC}\n"; fi
+
+      if [ "$mod" -eq 1 ]; then
+        _dirty=$((_dirty + 1))
+        { echo -e "${BRIGHT_PINK}▶ $repo_dir${NC}"; echo -e "$issues"; } >> "$tmpfile"
+      else
+        _clean=$((_clean + 1))
+        echo -e "${GREEN}✓${NC} $repo_dir" >> "$tmpfile"
+      fi
+      echo "$_total $_dirty $_clean" > "$countsfile"
+    done < <(find "$search_dir" -type d -name ".git" 2>/dev/null | sort)
+  ) </dev/null &
+  local scan_pid=$!
+
+  wait "$scan_pid" 2>/dev/null
+
+  # Kill spinner, overwrite spinner line, clear hint line below, restore cursor
+  kill "$spinner_pid" 2>/dev/null
+  wait "$spinner_pid" 2>/dev/null
+  printf "\r\033[2K${BLUE}=== Scanning: $search_dir ${GREEN}✓${NC}${BLUE} ===${NC}\n\033[2K\033[?25h"
+
+  # Read counts written by the subshell
+  local total dirty clean
+  read -r total dirty clean < "$countsfile"
+  rm -f "$countsfile"
+
+  # Dump buffered results
+  cat "$tmpfile"
+  rm -f "$tmpfile"
+
+  echo -e "${CYAN}─────────────────────────────────────────${NC}"
+  echo -e "  Total repos : ${BOLD}$total${NC}"
+  echo -e "  ${GREEN}Clean       : $clean${NC}"
+  if [ "$dirty" -gt 0 ]; then
+    echo -e "  ${RED}Need attention: $dirty${NC}"
+  else
+    echo -e "  ${GREEN}Need attention: 0${NC}"
+  fi
+  echo -e "${CYAN}─────────────────────────────────────────${NC}"
+}
+
+do_scan_default() {
+  if [ "$SHOW_DIRTY_ONLY" -eq 1 ]; then
+    do_scan_dirty_only_internal "$SCAN_DIR"
+  else
+    scan_repos "$SCAN_DIR"
+  fi
+  echo ""
+  read -rsn1 -p "Press any key to continue..."
+}
+
+do_scan_custom() {
+  echo ""
+  read -r -p "$(echo -e "${BRIGHT_PINK}Enter path to scan:${NC} ")" custom_path
+  if [ -z "$custom_path" ]; then
+    print_error "No path entered."
+    sleep 1
+    return
+  fi
+  # Expand ~ manually
+  custom_path="${custom_path/#\~/$HOME}"
+  if [ ! -d "$custom_path" ]; then
+    print_error "Directory not found: $custom_path"
+    sleep 1
+    return
+  fi
+  SCAN_DIR="$custom_path"
+  if [ "$SHOW_DIRTY_ONLY" -eq 1 ]; then
+    do_scan_dirty_only_internal "$SCAN_DIR"
+  else
+    scan_repos "$SCAN_DIR"
+  fi
+  echo ""
+  read -rsn1 -p "Press any key to continue..."
+}
+
+do_scan_dirty_only_internal() {
+  local search_dir
+  search_dir="$(cd "$1" && pwd)"
+
+  local tmpfile countsfile
+  tmpfile=$(mktemp)
+  countsfile=$(mktemp)
+  echo "0 0 0" > "$countsfile"
+
+  local spinner_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  printf "\033[?25l"  # hide cursor during scan
+
+  # Spinner updates the scanning line in-place; hint stays on the line below
+  (
+    local i=0
+    while true; do
+      printf "\r${BLUE}=== Dirty repos in: $search_dir ${BRIGHT_PINK}${spinner_chars[$((i % ${#spinner_chars[@]}))]}\033[0m${BLUE} ===${NC}\n  ${YELLOW}Ctrl+C to abort${NC}\033[1A"
+      i=$((i + 1))
+      sleep 0.1
+    done
+  ) &
+  local spinner_pid=$!
+
+  # Run the scan in a background subshell.
+  # stdin is closed (/dev/null) so git processes cannot steal terminal input.
+  (
+    local _total=0 _dirty=0 _clean=0
+    while IFS= read -r gitdir; do
+      local repo_dir mod issues
+      repo_dir=$(dirname "$gitdir")
+      _total=$((_total + 1))
+      mod=0
+      issues=""
+
+      git -C "$repo_dir" fetch --quiet 2>/dev/null || true
+      local status_out
+      status_out=$(git -C "$repo_dir" status 2>/dev/null)
+
+      if echo "$status_out" | grep -q "modified:";            then mod=1; issues="${issues}  ${RED}✗ Modified files${NC}\n"; fi
+      if echo "$status_out" | grep -q "Untracked files:";     then mod=1; issues="${issues}  ${RED}✗ Untracked files${NC}\n"; fi
+      if echo "$status_out" | grep -q "Your branch is ahead"; then mod=1; issues="${issues}  ${RED}✗ Unpushed commits${NC}\n"; fi
+      if echo "$status_out" | grep -q "Your branch is behind";then mod=1; issues="${issues}  ${YELLOW}⚠ Behind remote (pull needed)${NC}\n"; fi
+      if echo "$status_out" | grep -q "Changes to be committed:"; then mod=1; issues="${issues}  ${YELLOW}⚠ Staged but uncommitted changes${NC}\n"; fi
+
+      if [ "$mod" -eq 1 ]; then
+        _dirty=$((_dirty + 1))
+        { echo -e "${BRIGHT_PINK}▶ $repo_dir${NC}"; echo -e "$issues"; } >> "$tmpfile"
+      else
+        _clean=$((_clean + 1))
+      fi
+      echo "$_total $_dirty $_clean" > "$countsfile"
+    done < <(find "$search_dir" -type d -name ".git" 2>/dev/null | sort)
+  ) </dev/null &
+  local scan_pid=$!
+
+  wait "$scan_pid" 2>/dev/null
+
+  # Kill spinner, overwrite spinner line, clear hint line below, restore cursor
+  kill "$spinner_pid" 2>/dev/null
+  wait "$spinner_pid" 2>/dev/null
+  printf "\r\033[2K${BLUE}=== Dirty repos in: $search_dir ${GREEN}✓${NC}${BLUE} ===${NC}\n\033[2K\033[?25h"
+
+  # Read counts written by the subshell
+  local total dirty clean
+  read -r total dirty clean < "$countsfile"
+  rm -f "$countsfile"
+
+  # Dump buffered results
+  cat "$tmpfile"
+  rm -f "$tmpfile"
+
+  echo -e "${CYAN}─────────────────────────────────────────${NC}"
+  echo -e "  Total repos : ${BOLD}$total${NC}"
+  echo -e "  ${GREEN}Clean       : $clean${NC}"
+  if [ "$dirty" -gt 0 ]; then
+    echo -e "  ${RED}Need attention: $dirty${NC}"
+  else
+    echo -e "  ${GREEN}Need attention: 0${NC}"
+  fi
+  echo -e "${CYAN}─────────────────────────────────────────${NC}"
+}
+
+show_menu() {
+  clear
+  print_banner
+  # Dynamic spacing for directory path line
+  current_dir="$(pwd)"
+  dir_padding=$((55 - 2 - ${#current_dir}))
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
+  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Git Repository Status Checker *${NC}                     ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  printf "    ${CYAN}${ITALIC}║${NC}  ${YELLOW}%s${NC}%-*s${CYAN}${ITALIC}║${NC}\n" "$current_dir" "$dir_padding" ""
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Scan all repos (current path)                   ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} Scan repos (custom path)                        ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  # Dynamic display for option 3 based on SHOW_DIRTY_ONLY state
+  if [ "$SHOW_DIRTY_ONLY" -eq 1 ]; then
+    filter_status="${GREEN}[X]${NC}"
+  else
+    filter_status="${GREEN}[ ]${NC}"
+  fi
+  printf "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} %b Show dirty repos only                       ${CYAN}${ITALIC}║${NC}\n" "$filter_status"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+  echo ""
+}
+
+main() {
+  # Default scan dir: first argument or current directory
+  SCAN_DIR="${1:-.}"
+  # Expand ~ if passed as argument
+  SCAN_DIR="${SCAN_DIR/#\~/$HOME}"
+
+  # Non-interactive mode: --scan or -s flag just runs and exits
+  if [ "${1:-}" == "--scan" ] || [ "${1:-}" == "-s" ]; then
+    SCAN_DIR="${2:-.}"
+    scan_repos "$SCAN_DIR"
+    exit 0
+  fi
+
+  while true; do
+    show_menu
+    echo -ne "${BRIGHT_PINK}Select option [0-3]:${NC} "
+    read -rsn1 choice
+    echo ""
+    case $choice in
+      1) do_scan_default ;;
+      2) do_scan_custom ;;
+      3)
+        SHOW_DIRTY_ONLY=$((1 - SHOW_DIRTY_ONLY))
+        # Update only the X/space in the middle of the checkbox
+        printf "\033[6A\033[13G"  # Move up 6 lines, move to middle of checkbox
+        if [ "$SHOW_DIRTY_ONLY" -eq 1 ]; then
+          printf "X"
+        else
+          printf " "
+        fi
+        printf "\033[5B"  # Move down 5 lines back to prompt
+        ;;
+      0)
+        echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
+        exit 0
+        ;;
+      *)
+        print_error "Invalid option"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+main "$@"

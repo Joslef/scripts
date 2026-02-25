@@ -1,0 +1,310 @@
+#!/bin/bash
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+ITALIC='\033[3m'
+NC='\033[0m'
+
+# Fancy FF27DD color (bright magenta/pink) - ANSI 256 color
+PINK='\033[38;5;198m'
+BRIGHT_PINK='\033[38;5;201m'
+HOT_PINK='\033[38;5;205m'
+
+print_header() {
+  echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_error() {
+  echo -e "${RED}✗ $1${NC}"
+}
+
+print_banner() {
+  echo -e "${PINK}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╔══════════════════════════════════════════════╗${NC}${BRIGHT_PINK} *"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK} █████╗ ██████╗  ██████╗██╗  ██╗${NC}            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██╗██╔══██╗██╔════╝██║  ██║${NC}            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}███████║██████╔╝██║     ███████║${NC}            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██║██╔══██╗██║     ██╔══██║${NC}            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██║  ██║██║  ██║╚██████╗██║  ██║${NC}            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝${NC}            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███╗   ███╗ █████╗ ██╗███╗   ██╗████████╗${NC}   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}████╗ ████║██╔══██╗██║████╗  ██║╚══██╔══╝${NC}   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔████╔██║███████║██║██╔██╗ ██║   ██║${NC}      ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██║╚██╔╝██║██╔══██║██║██║╚██╗██║   ██║${NC}      ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██║ ╚═╝ ██║██║  ██║██║██║ ╚████║   ██║${NC}      ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚═╝     ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝   ╚═╝${NC}      ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╚══════════════════════════════════════════════╝${NC}${BRIGHT_PINK} *${NC}"
+  echo ""
+}
+
+confirm() {
+  read -r -p "$1 [y/N]: " response
+  case "$response" in
+  [yY][eE][sS] | [yY])
+    true
+    ;;
+  *)
+    false
+    ;;
+  esac
+}
+
+check_sudo() {
+  if ! sudo -n true 2>/dev/null; then
+    print_warning "Sudo access required. You may be prompted for password."
+  fi
+}
+
+do_update() {
+  print_header "System Update"
+  if confirm "Update package database and upgrade system?"; then
+    sudo pacman -Syu --needed
+    print_success "System updated"
+  else
+    print_warning "Update skipped"
+  fi
+}
+
+do_orphans() {
+  print_header "Orphan Packages"
+
+  if ! orphans=$(pacman -Qtdq 2>/dev/null) || [ -z "$orphans" ]; then
+    print_success "No orphan packages found"
+    return 0
+  fi
+
+  echo "Found orphan packages:"
+  echo "$orphans"
+
+  if confirm "Remove these orphan packages?"; then
+    echo "$orphans" | xargs -r sudo pacman -Rns --
+    print_success "Orphans removed"
+  else
+    print_warning "Orphans kept"
+  fi
+}
+
+# FIXED: Shows current cache status and actual paccache output
+do_cache() {
+  print_header "Package Cache Cleanup"
+
+  if ! command -v paccache &>/dev/null; then
+    print_warning "paccache not found (install: sudo pacman -S pacman-contrib)"
+    if confirm "Use pacman -Sc instead? (keeps only latest version)"; then
+      sudo pacman -Sc
+      print_success "Cache cleaned"
+    fi
+    return 0
+  fi
+
+  # Show current cache size first
+  echo "Current cache status:"
+  echo "  Packages in cache: $(ls /var/cache/pacman/pkg/*.pkg.tar* 2>/dev/null | wc -l)"
+  echo "  Cache size: $(du -sh /var/cache/pacman/pkg/ 2>/dev/null | cut -f1)"
+  echo ""
+
+  echo "Cache cleanup options:"
+  echo "  1) Keep 3 recent versions (recommended)"
+  echo "  2) Keep 1 recent version (aggressive)"
+  echo "  3) Remove uninstalled packages (keep 0)"
+  echo "  4) Dry run (preview only)"
+  echo "  5) Skip"
+
+  read -r -p "Select option [1-5]: " choice
+
+  case $choice in
+  1)
+    echo ""
+    echo "Running: paccache -rv (keep 3 versions)..."
+    sudo paccache -rv
+    echo ""
+    print_success "Cache cleanup completed"
+    read -r -p "Press Enter to continue..."
+    ;;
+  2)
+    if confirm "This keeps only 1 version. Continue?"; then
+      echo ""
+      echo "Running: paccache -rvk1 (keep 1 version)..."
+      sudo paccache -rvk1
+      echo ""
+      print_success "Cache cleanup completed"
+      read -r -p "Press Enter to continue..."
+    fi
+    ;;
+  3)
+    if confirm "Remove ALL cached versions of uninstalled packages?"; then
+      echo ""
+      echo "Running: paccache -rvuk0 (remove uninstalled)..."
+      sudo paccache -rvuk0
+      echo ""
+      print_success "Uninstalled packages removed from cache"
+      read -r -p "Press Enter to continue..."
+    fi
+    ;;
+  4)
+    echo ""
+    echo "Dry run - packages that would be removed:"
+    paccache -dv
+    read -r -p "Press Enter to continue..."
+    ;;
+  *)
+    print_warning "Cache cleanup skipped"
+    read -r -p "Press Enter to continue..."
+    ;;
+  esac
+}
+
+do_db_check() {
+  print_header "Database Check"
+  if confirm "Check package database for errors?"; then
+    echo "Checking database..."
+    if pacman -Dk; then
+      print_success "Database OK"
+    else
+      print_error "Database issues found (see above)"
+    fi
+    read -r -p "Press Enter to continue..."
+  fi
+}
+
+do_foreign() {
+  print_header "Foreign/AUR Packages"
+
+  if ! foreign=$(pacman -Qm 2>/dev/null) || [ -z "$foreign" ]; then
+    print_success "No foreign packages"
+    read -r -p "Press Enter to continue..."
+    return 0
+  fi
+
+  echo "Foreign packages installed:"
+  echo "$foreign"
+  count=$(echo "$foreign" | wc -l)
+  print_warning "$count foreign packages found (review manually if needed)"
+  read -r -p "Press Enter to continue..."
+}
+
+do_info() {
+  print_header "System Info"
+  echo "Disk usage:"
+  df -h / | tail -1
+
+  echo -e "\nPackage statistics:"
+  echo "  Explicitly installed: $(pacman -Qe | wc -l)"
+  echo "  Total installed: $(pacman -Q | wc -l)"
+  echo "  Orphans: $(pacman -Qtdq 2>/dev/null | wc -l)"
+  echo "  Foreign: $(pacman -Qm 2>/dev/null | wc -l)"
+
+  if command -v paccache &>/dev/null; then
+    # Count packages in cache directory directly
+    local cache_count
+    cache_count=$(ls /var/cache/pacman/pkg/*.pkg.tar* 2>/dev/null | wc -l) || cache_count=0
+    echo "  Cache packages: $cache_count"
+  fi
+  read -r -p "Press Enter to continue..."
+}
+
+do_quick() {
+  print_header "QUICK MODE"
+  print_warning "Running: update, orphans, cache (keep 3), db check, info"
+
+  sudo pacman -Syu --needed --noconfirm
+
+  if orphans=$(pacman -Qtdq 2>/dev/null) && [ -n "$orphans" ]; then
+    echo "$orphans" | xargs -r sudo pacman -Rns -- --noconfirm
+  fi
+
+  if command -v paccache &>/dev/null; then
+    paccache -r 2>/dev/null || true
+  fi
+
+  if pacman -Dk 2>&1 | grep -qi "error"; then
+    print_warning "Database issues detected (run full check for details)"
+  fi
+
+  do_info
+}
+
+show_menu() {
+  clear
+  print_banner
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔══════════════════════════════════════════════╗${NC}${CYAN} *"
+  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Arch Linux Maintenance Script *${NC}            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠══════════════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Full Update                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} Remove Orphan Packages                 ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Clean Package Cache                    ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Check Database                         ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} List Foreign/AUR Packages              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} System Info                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} ${BRIGHT_PINK}QUICK MODE${NC} (all safe ops)              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}8)${NC} Run All (interactive)                  ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                                   ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚══════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+}
+
+main() {
+  check_sudo
+
+  if [ "${1:-}" == "--quick" ]; then
+    do_quick
+    exit 0
+  fi
+
+  while true; do
+    show_menu
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-8]:${NC} ")" choice
+
+    case $choice in
+    1) do_update ;;
+    2) do_orphans ;;
+    3) do_cache ;;
+    4) do_db_check ;;
+    5) do_foreign ;;
+    6) do_info ;;
+    7)
+      do_quick
+      read -r -p "Press Enter to continue..."
+      ;;
+    8)
+      do_update
+      do_orphans
+      do_cache
+      do_db_check
+      do_foreign
+      do_info
+      read -r -p "Press Enter to continue..."
+      ;;
+    0)
+      echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
+      exit 0
+      ;;
+    *)
+      print_error "Invalid option"
+      sleep 1
+      ;;
+    esac
+  done
+}
+
+main "$@"
