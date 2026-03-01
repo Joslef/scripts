@@ -2,7 +2,7 @@
 
 set -uo pipefail
 
-# ─── Colors (matching ~/scripts style) ────────────────────────────────────────
+# ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -17,14 +17,19 @@ PINK='\033[38;5;198m'
 BRIGHT_PINK='\033[38;5;201m'
 HOT_PINK='\033[38;5;205m'
 
-# Extra colors for now-playing display
 ORANGE='\033[38;5;208m'
 PURPLE='\033[38;5;141m'
 SKY_BLUE='\033[38;5;117m'
 GOLD='\033[38;5;220m'
 LIME='\033[38;5;118m'
 
-# ─── Radio Stations ──────────────────────────────────────────────────────────
+# ─── Animation arrays (global, initialized after colors) ──────────────────────
+declare -a ANIM_MUSIC_L=('♪' '♫' '♬' '♩' '♪' '♫' '♬' '♩')
+declare -a ANIM_MUSIC_R=('♫' '♬' '♩' '♪' '♫' '♬' '♩' '♪')
+declare -a ANIM_BARS=('▁' '▂' '▃' '▄' '▅' '▆' '▇' '█' '▇' '▆' '▅' '▄' '▃' '▂')
+declare -a ANIM_COLORS
+
+# ─── Radio Stations ───────────────────────────────────────────────────────────
 declare -a STATION_NAMES=(
   "amambient"
   "ambientradio"
@@ -83,168 +88,59 @@ get_station_url() {
   esac
 }
 
-# ─── Cleanup on exit ─────────────────────────────────────────────────────────
+# ─── Global state ─────────────────────────────────────────────────────────────
+SELECTED=0
+PLAYING_STATION=""
+PLAY_TITLE=""
+PLAY_ARTIST=""
+ANIM_FRAME=0
+LAST_ANIM_S=0
+LAST_ANIM_MS=0
+DISCO=1
+PAUSED=0
 MPV_PID=""
-VISUALIZER_PID=""
+META_FILE=""
+LUA_SCRIPT=""
+KEY=""
+READ_TIMEOUT="1"
+ESC_TIMEOUT="1"
 
+# ─── Cleanup on exit ──────────────────────────────────────────────────────────
 cleanup() {
-  # Kill visualizer if running
-  if [ -n "$VISUALIZER_PID" ] && kill -0 "$VISUALIZER_PID" 2>/dev/null; then
-    kill "$VISUALIZER_PID" 2>/dev/null
-    wait "$VISUALIZER_PID" 2>/dev/null
-  fi
-  # Kill mpv if running
   if [ -n "$MPV_PID" ] && kill -0 "$MPV_PID" 2>/dev/null; then
     kill "$MPV_PID" 2>/dev/null
     wait "$MPV_PID" 2>/dev/null
   fi
-  # Restore cursor and clear line
   printf "\033[?25h\033[2K"
-  rm -f /tmp/audioshell_mpv_ipc_$$ /tmp/audioshell_meta_$$ /tmp/audioshell_meta_$$.lua 2>/dev/null
+  [ -n "$META_FILE" ]  && rm -f "$META_FILE"  2>/dev/null
+  [ -n "$LUA_SCRIPT" ] && rm -f "$LUA_SCRIPT" 2>/dev/null
 }
 
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 
-# ─── Helper functions ─────────────────────────────────────────────────────────
-print_header() {
-  echo -e "\n${BLUE}=== $1 ===${NC}"
-}
+# ─── Start (or switch to) a station ───────────────────────────────────────────
+start_station() {
+  local name="$1"
+  local url
+  url=$(get_station_url "$name")
 
-print_success() {
-  echo -e "${GREEN}✓ $1${NC}"
-}
+  # Stop any current playback
+  if [ -n "$MPV_PID" ] && kill -0 "$MPV_PID" 2>/dev/null; then
+    kill "$MPV_PID" 2>/dev/null
+    wait "$MPV_PID" 2>/dev/null
+  fi
+  MPV_PID=""
+  PLAY_TITLE=""
+  PLAY_ARTIST=""
+  [ -n "$META_FILE" ]  && rm -f "$META_FILE"  2>/dev/null
+  [ -n "$LUA_SCRIPT" ] && rm -f "$LUA_SCRIPT" 2>/dev/null
 
-print_warning() {
-  echo -e "${YELLOW}⚠ $1${NC}"
-}
+  META_FILE="/tmp/audioshell_meta_$$"
+  LUA_SCRIPT="/tmp/audioshell_meta_$$.lua"
 
-print_error() {
-  echo -e "${RED}✗ $1${NC}"
-}
-
-# ─── Banner ───────────────────────────────────────────────────────────────────
-print_banner() {
-  echo -e "${PINK}"
-  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${BRIGHT_PINK} *"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK} █████╗ ██╗   ██╗██████╗ ██╗ ██████╗ ${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██╗██║   ██║██╔══██╗██║██╔═══██╗${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}███████║██║   ██║██║  ██║██║██║   ██║${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██║██║   ██║██║  ██║██║██║   ██║${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██║  ██║╚██████╔╝██████╔╝██║╚██████╔╝${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝ ╚═════╝ ${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗██╗  ██╗███████╗██╗     ██╗     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔════╝██║  ██║██╔════╝██║     ██║     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗███████║█████╗  ██║     ██║     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚════██║██╔══██║██╔══╝  ██║     ██║     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████║██║  ██║███████╗███████╗███████╗${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
-  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${BRIGHT_PINK} *${NC}"
-  echo ""
-}
-
-# ─── Now-Playing Visualizer ───────────────────────────────────────────────────
-# Animated playback display with dancing music symbols and colored metadata
-run_visualizer() {
-  local station_name="$1"
-  local meta_file="$2"
-
-  # Music symbol sets for dancing animation
-  local -a music_left=('♪' '♫' '♬' '♩' '♪' '♫' '♬' '♩')
-  local -a music_right=('♫' '♬' '♩' '♪' '♫' '♬' '♩' '♪')
-  local -a bounce=('⠁' '⠂' '⠄' '⡀' '⠄' '⠂' '⠁' '⠈' '⠐' '⠠' '⠐' '⠈')
-  local -a bars=('▁' '▂' '▃' '▄' '▅' '▆' '▇' '█' '▇' '▆' '▅' '▄' '▃' '▂')
-  local -a color_cycle=("$BRIGHT_PINK" "$HOT_PINK" "$PURPLE" "$SKY_BLUE" "$CYAN" "$LIME" "$GOLD" "$ORANGE")
-
-  local frame=0
-  local prev_title=""
-  local title=""
-  local artist=""
-  local display_title=""
-
-  printf "\033[?25l"  # hide cursor
-
-  while true; do
-    # Read metadata written by the mpv Lua hook
-    if [ -f "$meta_file" ]; then
-      local raw_title raw_artist
-      raw_title=$(sed -n '1p' "$meta_file" 2>/dev/null)
-      raw_artist=$(sed -n '2p' "$meta_file" 2>/dev/null)
-
-      if [ -n "$raw_title" ]; then
-        # Some streams put "Artist - Title" in the title field
-        if [ -z "$raw_artist" ] && [[ "$raw_title" == *" - "* ]]; then
-          artist="${raw_title%% - *}"
-          title="${raw_title#* - }"
-        elif [ -n "$raw_artist" ]; then
-          artist="$raw_artist"
-          title="$raw_title"
-        else
-          artist=""
-          title="$raw_title"
-        fi
-      fi
-    fi
-
-    # Build the animated display
-    local ci=$((frame % ${#color_cycle[@]}))
-    local mi_l=$((frame % ${#music_left[@]}))
-    local mi_r=$(( (frame + 4) % ${#music_right[@]} ))
-    local bi=$((frame % ${#bars[@]}))
-    local bi2=$(( (frame + 3) % ${#bars[@]}))
-    local bi3=$(( (frame + 7) % ${#bars[@]}))
-    local bi4=$(( (frame + 5) % ${#bars[@]}))
-    local bi5=$(( (frame + 10) % ${#bars[@]}))
-
-    local c1="${color_cycle[$ci]}"
-    local c2="${color_cycle[$(( (ci + 2) % ${#color_cycle[@]} ))]}"
-    local c3="${color_cycle[$(( (ci + 4) % ${#color_cycle[@]} ))]}"
-    local c4="${color_cycle[$(( (ci + 6) % ${#color_cycle[@]} ))]}"
-
-    # Equalizer bars animation
-    local eq="${c1}${bars[$bi]}${c2}${bars[$bi2]}${c3}${bars[$bi3]}${c4}${bars[$bi4]}${c1}${bars[$bi5]}${NC}"
-
-    # Dancing music notes
-    local note_l="${c2}${music_left[$mi_l]}${NC}"
-    local note_r="${c3}${music_right[$mi_r]}${NC}"
-
-    # Build now-playing line
-    local now_playing=""
-    if [ -n "$artist" ] && [ -n "$title" ]; then
-      now_playing="${GOLD}${BOLD}${artist}${NC} ${CYAN}-${NC} ${PURPLE}${ITALIC}${title}${NC}"
-    elif [ -n "$title" ]; then
-      now_playing="${PURPLE}${ITALIC}${title}${NC}"
-    else
-      now_playing="${YELLOW}Connecting...${NC}"
-    fi
-
-    # Move cursor up and redraw (3 lines: separator, station, now-playing)
-    if [ "$frame" -gt 0 ]; then
-      printf "\033[3A"
-    fi
-
-    printf "\033[2K  ${note_l} ${eq} ${note_r}  ${c1}${music_left[$(( (frame+2) % ${#music_left[@]} ))]}${NC} ${eq} ${c4}${music_right[$(( (frame+1) % ${#music_right[@]} ))]}${NC}  ${note_l} ${eq} ${note_r}\n"
-    printf "\033[2K  ${c1}▶${NC}  ${GREEN}${BOLD}${station_name}${NC}\n"
-    printf "\033[2K     ${now_playing}\n"
-
-    frame=$((frame + 1))
-    sleep 0.3
-  done
-}
-
-# ─── Play station ─────────────────────────────────────────────────────────────
-play_station() {
-  local station_name="$1"
-  local station_url
-  station_url=$(get_station_url "$station_name")
-  local meta_file="/tmp/audioshell_meta_$$"
-  local lua_script="/tmp/audioshell_meta_$$.lua"
-
-  # Write a small Lua hook that updates the metadata file whenever track info changes
-  cat > "$lua_script" << 'LUAEOF'
+  # Lua hook: writes metadata to file whenever track info changes
+  cat > "$LUA_SCRIPT" << 'LUAEOF'
 local f = os.getenv("AUDIOSHELL_META_FILE")
 local function write_meta()
   local title  = mp.get_property("media-title") or ""
@@ -252,110 +148,275 @@ local function write_meta()
   local fh = io.open(f, "w")
   if fh then fh:write(title .. "\n" .. artist .. "\n"); fh:close() end
 end
-mp.observe_property("media-title",              "string", write_meta)
-mp.observe_property("metadata/by-key/artist",   "string", write_meta)
+mp.observe_property("media-title",            "string", write_meta)
+mp.observe_property("metadata/by-key/artist", "string", write_meta)
 LUAEOF
 
-  clear
-  echo ""
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
-  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Now Playing *${NC}                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${GREEN}Station:${NC} ${BOLD}${station_name}${NC}$(printf '%*s' $((44 - ${#station_name})) '')${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${YELLOW}Press ${BOLD}q${NC}${YELLOW} to stop and return to menu${NC}                   ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${YELLOW}Press ${BOLD}9${NC}${YELLOW}/${BOLD}0${NC}${YELLOW} to adjust volume${NC}                           ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${YELLOW}Press ${BOLD}m${NC}${YELLOW} to mute/unmute${NC}                               ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
-  echo ""
-
-  # Start mpv in background with Lua hook for metadata
-  AUDIOSHELL_META_FILE="$meta_file" mpv --no-video --really-quiet \
-    --script="$lua_script" \
-    --term-osd-bar \
-    "$station_url" &
+  AUDIOSHELL_META_FILE="$META_FILE" mpv --no-video --really-quiet \
+    --no-terminal \
+    --script="$LUA_SCRIPT" \
+    "$url" </dev/null &
   MPV_PID=$!
-
-  # Give mpv a moment to connect and write initial metadata
-  sleep 1
-
-  # Start the visualizer in background
-  run_visualizer "$station_name" "$meta_file" &
-  VISUALIZER_PID=$!
-
-  # Wait for mpv to finish (user presses q in terminal or mpv dies)
-  wait "$MPV_PID" 2>/dev/null
-  MPV_PID=""
-
-  # Kill visualizer
-  if [ -n "$VISUALIZER_PID" ] && kill -0 "$VISUALIZER_PID" 2>/dev/null; then
-    kill "$VISUALIZER_PID" 2>/dev/null
-    wait "$VISUALIZER_PID" 2>/dev/null
-  fi
-  VISUALIZER_PID=""
-
-  printf "\033[?25h"  # restore cursor
-  rm -f "$meta_file" "$lua_script" 2>/dev/null
+  PLAYING_STATION="$name"
+  PAUSED=0
 }
 
-# ─── Station list menu ────────────────────────────────────────────────────────
-show_menu() {
-  clear
-  print_banner
+# ─── Read and update metadata from Lua-written file ───────────────────────────
+update_metadata() {
+  # Detect if mpv died unexpectedly
+  if [ -n "$MPV_PID" ] && ! kill -0 "$MPV_PID" 2>/dev/null; then
+    MPV_PID=""
+    PLAYING_STATION=""
+    PLAY_TITLE=""
+    PLAY_ARTIST=""
+    return
+  fi
 
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
-  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Internet Radio Stations *${NC}                           ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  [ -z "$PLAYING_STATION" ] && return
+  [ ! -f "$META_FILE" ]     && return
 
-  local i=1
-  for name in "${STATION_NAMES[@]}"; do
+  local raw_title raw_artist
+  raw_title=$(sed -n '1p' "$META_FILE" 2>/dev/null)
+  raw_artist=$(sed -n '2p' "$META_FILE" 2>/dev/null)
+
+  [ -z "$raw_title" ] && return
+
+  if [ -z "$raw_artist" ] && [[ "$raw_title" == *" - "* ]]; then
+    PLAY_ARTIST="${raw_title%% - *}"
+    PLAY_TITLE="${raw_title#* - }"
+  elif [ -n "$raw_artist" ]; then
+    PLAY_ARTIST="$raw_artist"
+    PLAY_TITLE="$raw_title"
+  else
+    PLAY_ARTIST=""
+    PLAY_TITLE="$raw_title"
+  fi
+}
+
+# ─── Advance animation frame based on real time, not keypress rate ───────────
+# Uses $EPOCHREALTIME (bash 5+) for ~3fps, falls back to $SECONDS (1fps).
+# When DISCO=0 the frame is frozen.
+try_advance_frame() {
+  # Returns 0 if frame was advanced, 1 if not (used by caller to decide redraw)
+  [ "$DISCO" -eq 0 ] && return 1
+  if [ -n "${EPOCHREALTIME+x}" ]; then
+    local e="${EPOCHREALTIME}" s f ms
+    s="${e%.*}"; f="${e#*.}"
+    ms=$(( s * 1000 + 10#${f:0:3} ))
+    [ $(( ms - LAST_ANIM_MS )) -lt 300 ] && return 1
+    LAST_ANIM_MS=$ms
+  else
+    [ "$SECONDS" -eq "$LAST_ANIM_S" ] && return 1
+    LAST_ANIM_S=$SECONDS
+  fi
+  ANIM_FRAME=$(( ANIM_FRAME + 1 ))
+  return 0
+}
+
+# ─── Draw entire screen in-place (no flicker) ─────────────────────────────────
+draw_screen() {
+  local total=${#STATION_NAMES[@]}
+  local term_rows
+  term_rows=$(tput lines 2>/dev/null || echo 24)
+
+  # Fixed lines used outside the station list:
+  #   header(3) + blank(1) + hint(1) + blank(1) + blank(1) + now-playing(4) = 11
+  local overhead=11
+  local visible=$(( term_rows - overhead ))
+  [ "$visible" -lt 3 ]        && visible=3
+  [ "$visible" -gt "$total" ] && visible=$total
+
+  # Keep selected item centered in the visible window
+  local scroll=$(( SELECTED - visible / 2 ))
+  local max_scroll=$(( total - visible ))
+  [ "$scroll" -gt "$max_scroll" ] && scroll=$max_scroll
+  [ "$scroll" -lt 0 ]             && scroll=0
+
+  # Move to top-left without clearing (prevents flicker)
+  printf '\033[H'
+
+  # ── Header ──
+  printf "\033[2K  ${CYAN}╔═══════════════════════════════════════════════════════╗${NC}\n"
+  printf "\033[2K  ${CYAN}║${NC}  ${BRIGHT_PINK}♪ audioshell${NC} ${PINK}·${NC} Internet Radio                        ${CYAN}║${NC}\n"
+  printf "\033[2K  ${CYAN}╚═══════════════════════════════════════════════════════╝${NC}\n"
+  printf "\033[2K\n"
+  local disco_indicator
+  [ "$DISCO" -eq 1 ] && disco_indicator="${BRIGHT_PINK}on${NC}" || disco_indicator="${YELLOW}off${NC}"
+  printf "\033[2K  ${YELLOW}j/↓${NC} down  ${YELLOW}k/↑${NC} up  ${YELLOW}Space${NC} play  ${YELLOW}p${NC} pause  ${YELLOW}d${NC} disco[%b]  ${YELLOW}q${NC} quit\n" "$disco_indicator"
+  printf "\033[2K\n"
+
+  # ── Station list (scrolling window) ──
+  local i
+  for (( i=0; i<visible; i++ )); do
+    local idx=$(( scroll + i ))
+    local name="${STATION_NAMES[$idx]}"
     local num
-    num=$(printf "%2d" "$i")
-    local pad=$((47 - ${#name}))
-    if [ "$pad" -lt 0 ]; then pad=0; fi
-    printf "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}%s)${NC} ${BOLD}%s${NC}%*s${CYAN}${ITALIC}║${NC}\n" "$num" "$name" "$pad" ""
-    i=$((i + 1))
-  done
+    num=$(printf "%2d" $(( idx + 1 )))
 
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED} 0)${NC} Exit                                           ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
-  echo ""
+    local playing_mark=""
+    [ "$name" = "$PLAYING_STATION" ] && playing_mark="  ${CYAN}♪${NC}"
+
+    if [ "$idx" -eq "$SELECTED" ]; then
+      printf "\033[2K  ${HOT_PINK}▶${NC}  ${GREEN}${BOLD}%s)${NC} ${BRIGHT_PINK}${BOLD}%s${NC}%b\n" \
+        "$num" "$name" "$playing_mark"
+    else
+      printf "\033[2K     ${GREEN}%s)${NC} %s%b\n" \
+        "$num" "$name" "$playing_mark"
+    fi
+  done
+  printf "\033[2K\n"
+
+  # ── Now-playing section ──
+  if [ -n "$PLAYING_STATION" ]; then
+    local nc_len=${#ANIM_COLORS[@]}
+    local nb_len=${#ANIM_BARS[@]}
+    local nm_len=${#ANIM_MUSIC_L[@]}
+
+    local ci=$(( ANIM_FRAME % nc_len ))
+    local bi=$(( ANIM_FRAME % nb_len ))
+    local bi2=$(( (ANIM_FRAME + 3) % nb_len ))
+    local bi3=$(( (ANIM_FRAME + 7) % nb_len ))
+    local bi4=$(( (ANIM_FRAME + 5) % nb_len ))
+    local bi5=$(( (ANIM_FRAME + 10) % nb_len ))
+    local mi=$(( ANIM_FRAME % nm_len ))
+    local mi2=$(( (ANIM_FRAME + 4) % nm_len ))
+
+    local c1="${ANIM_COLORS[$ci]}"
+    local c2="${ANIM_COLORS[$(( (ci+2) % nc_len ))]}"
+    local c3="${ANIM_COLORS[$(( (ci+4) % nc_len ))]}"
+    local c4="${ANIM_COLORS[$(( (ci+6) % nc_len ))]}"
+
+    local eq="${c1}${ANIM_BARS[$bi]}${c2}${ANIM_BARS[$bi2]}${c3}${ANIM_BARS[$bi3]}${c4}${ANIM_BARS[$bi4]}${c1}${ANIM_BARS[$bi5]}${NC}"
+    local nl="${c2}${ANIM_MUSIC_L[$mi]}${NC}"
+    local nr="${c3}${ANIM_MUSIC_R[$mi2]}${NC}"
+    local ne1="${c1}${ANIM_MUSIC_L[$(( (ANIM_FRAME+2) % nm_len ))]}${NC}"
+    local ne2="${c4}${ANIM_MUSIC_R[$(( (ANIM_FRAME+1) % nm_len ))]}${NC}"
+
+    local now_playing
+    if [ -n "$PLAY_ARTIST" ] && [ -n "$PLAY_TITLE" ]; then
+      now_playing="${GOLD}${BOLD}${PLAY_ARTIST}${NC} ${CYAN}-${NC} ${PURPLE}${ITALIC}${PLAY_TITLE}${NC}"
+    elif [ -n "$PLAY_TITLE" ]; then
+      now_playing="${PURPLE}${ITALIC}${PLAY_TITLE}${NC}"
+    else
+      now_playing="${YELLOW}Connecting...${NC}"
+    fi
+
+    printf "\033[2K  %b %b %b  %b %b %b  %b %b %b\n" "$nl" "$eq" "$nr" "$ne1" "$eq" "$ne2" "$nl" "$eq" "$nr"
+    printf "\033[2K\n"
+    local play_icon; [ "$PAUSED" -eq 1 ] && play_icon="⏸" || play_icon="▶"
+    printf "\033[2K  ${c1}%s${NC}  ${c1}${BOLD}%s${NC}\n" "$play_icon" "$PLAYING_STATION"
+    printf "\033[2K     %b\n" "$now_playing"
+    printf "\033[2K\n"
+  else
+    printf "\033[2K\n"
+    printf "\033[2K\n"
+    printf "\033[2K\n"
+    printf "\033[2K\n"
+    printf "\033[2K\n"
+  fi
+
+  # Clear anything below current position
+  printf '\033[J'
+}
+
+# ─── Read a single keypress into global KEY (no subshell) ────────────────────
+# Bash 3.2 (macOS default) does not support fractional read -t values.
+# READ_TIMEOUT / ESC_TIMEOUT are set in main() after bash version detection.
+read_key() {
+  KEY=""
+  IFS= read -r -s -t "$READ_TIMEOUT" -n1 KEY </dev/tty 2>/dev/null
+  local ret=$?
+  # read exits 0 on success, non-zero on timeout.
+  # When Enter is pressed, read exits 0 but KEY is empty (delimiter consumed).
+  if [ $ret -eq 0 ] && [ -z "$KEY" ]; then
+    KEY=$'\n'
+    return
+  fi
+  # Handle escape sequences (arrow keys: ESC [ A/B/C/D)
+  if [[ "$KEY" == $'\033' ]]; then
+    local k2="" k3=""
+    IFS= read -r -s -t "$ESC_TIMEOUT" -n1 k2 </dev/tty 2>/dev/null || true
+    if [[ "$k2" == '[' ]]; then
+      IFS= read -r -s -t "$ESC_TIMEOUT" -n1 k3 </dev/tty 2>/dev/null || true
+    fi
+    KEY="${KEY}${k2}${k3}"
+  fi
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
-  # Check dependencies
   if ! command -v mpv &>/dev/null; then
-    print_error "mpv is not installed. Install it with: sudo pacman -S mpv"
+    echo "mpv is not installed. Install it first."
     exit 1
+  fi
+
+  # Initialize color cycle for animation (needs color vars to be set first)
+  ANIM_COLORS=("$BRIGHT_PINK" "$HOT_PINK" "$PURPLE" "$SKY_BLUE" "$CYAN" "$LIME" "$GOLD" "$ORANGE")
+
+  # Bash 3.2 (macOS default) only supports integer read -t values.
+  # Bash 4+ supports fractional seconds for smoother animation.
+  local bash_major="${BASH_VERSION%%.*}"
+  if [ "${bash_major:-0}" -ge 4 ]; then
+    READ_TIMEOUT="0.3"
+    ESC_TIMEOUT="0.05"
+  else
+    READ_TIMEOUT="1"
+    ESC_TIMEOUT="1"
   fi
 
   local total=${#STATION_NAMES[@]}
 
+  clear
+  printf '\033[?25l'  # hide cursor
+
+  # Initial draw
+  update_metadata
+  draw_screen
+
   while true; do
-    show_menu
-    read -r -p "$(echo -e "${BRIGHT_PINK}Select station [0-${total}]:${NC} ")" choice
+    read_key  # blocks for READ_TIMEOUT; result stored in global KEY
 
-    if [ "$choice" == "0" ]; then
-      echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
-      exit 0
-    fi
+    local need_redraw=0
 
-    # Validate numeric input
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$total" ]; then
-      print_error "Invalid option"
-      sleep 1
-      continue
-    fi
+    case "$KEY" in
+      'j'|$'\033[B')   # j or down arrow
+        SELECTED=$(( (SELECTED + 1) % total ))
+        need_redraw=1
+        ;;
+      'k'|$'\033[A')   # k or up arrow
+        SELECTED=$(( (SELECTED - 1 + total) % total ))
+        need_redraw=1
+        ;;
+      ' ')             # Space — start selected station
+        start_station "${STATION_NAMES[$SELECTED]}"
+        need_redraw=1
+        ;;
+      'p'|'P')         # pause / resume
+        if [ -n "$MPV_PID" ] && kill -0 "$MPV_PID" 2>/dev/null; then
+          if [ "$PAUSED" -eq 0 ]; then
+            kill -STOP "$MPV_PID" 2>/dev/null && PAUSED=1
+          else
+            kill -CONT "$MPV_PID" 2>/dev/null && PAUSED=0
+          fi
+          need_redraw=1
+        fi
+        ;;
+      'd'|'D')         # toggle disco (animation on/off)
+        [ "$DISCO" -eq 1 ] && DISCO=0 || DISCO=1
+        need_redraw=1
+        ;;
+      'q'|'Q')
+        printf '\033[?25h'
+        clear
+        printf "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n\n"
+        exit 0
+        ;;
+    esac
 
-    local idx=$((choice - 1))
-    local selected="${STATION_NAMES[$idx]}"
-    play_station "$selected"
+    update_metadata
+    try_advance_frame && need_redraw=1
+
+    [ "$need_redraw" -eq 1 ] && draw_screen
   done
 }
 
