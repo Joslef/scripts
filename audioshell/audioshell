@@ -1,0 +1,351 @@
+#!/bin/bash
+
+set -uo pipefail
+
+# ─── Colors (matching ~/scripts style) ────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+ITALIC='\033[3m'
+NC='\033[0m'
+
+PINK='\033[38;5;198m'
+BRIGHT_PINK='\033[38;5;201m'
+HOT_PINK='\033[38;5;205m'
+
+# Extra colors for now-playing display
+ORANGE='\033[38;5;208m'
+PURPLE='\033[38;5;141m'
+SKY_BLUE='\033[38;5;117m'
+GOLD='\033[38;5;220m'
+LIME='\033[38;5;118m'
+
+# ─── Radio Stations ──────────────────────────────────────────────────────────
+declare -a STATION_NAMES=(
+  "amambient"
+  "ambientradio"
+  "anotherplanet"
+  "cliqhop"
+  "costadelmar"
+  "deepspaceone"
+  "defcon"
+  "dronezone"
+  "dubstep"
+  "egochillout"
+  "egoflash"
+  "egofm"
+  "egorap"
+  "egosun"
+  "groovesalad"
+  "groovesaladclassic"
+  "missioncontrol"
+  "psyradio"
+  "schizoid"
+  "secretagent"
+  "seventies"
+  "sleepingpill"
+  "spacestation"
+  "synphaer"
+  "zerobeat"
+)
+
+declare -A STATION_URLS=(
+  ["dronezone"]="http://api.somafm.com/dronezone.pls"
+  ["groovesalad"]="http://api.somafm.com/groovesalad.pls"
+  ["deepspaceone"]="http://api.somafm.com/deepspaceone.pls"
+  ["spacestation"]="http://api.somafm.com/spacestation.pls"
+  ["anotherplanet"]="http://stream.anotherplanet.fm:8000/stream.mp3"
+  ["psyradio"]="http://host.psyradio.fm:8020/;listen.mp3"
+  ["egochillout"]="https://streams.egofm.de/egoCHILLOUT-hq"
+  ["egosun"]="https://streams.egofm.de/egoSUN-hq"
+  ["egoflash"]="https://streams.egofm.de/egoFLASH-hq"
+  ["egofm"]="https://streams.egofm.de/egoFM-hq"
+  ["sleepingpill"]="http://s.stereoscenic.com/asp-h.pls"
+  ["schizoid"]="http://schizoid.in/schizoid-chill.pls"
+  ["costadelmar"]="https://radio4.cdm-radio.com:18020/stream-mp3-Chill"
+  ["amambient"]="http://radio.stereoscenic.com/ama-h"
+  ["zerobeat"]="http://zerobeatzone.mrg.fm:8800/stream3"
+  ["ambientradio"]="http://listen.mrg.fm:8888/stream"
+  ["egorap"]="https://streams.egofm.de/egoRAP-hq"
+  ["cliqhop"]="http://api.somafm.com/cliqhop.pls"
+  ["defcon"]="http://api.somafm.com/defcon.pls"
+  ["dubstep"]="http://api.somafm.com/dubstep.pls"
+  ["groovesaladclassic"]="http://api.somafm.com/gsclassic.pls"
+  ["missioncontrol"]="http://api.somafm.com/missioncontrol.pls"
+  ["secretagent"]="http://api.somafm.com/secretagent.pls"
+  ["seventies"]="http://api.somafm.com/seventies.pls"
+  ["synphaer"]="http://api.somafm.com/synphaera.pls"
+)
+
+# ─── Cleanup on exit ─────────────────────────────────────────────────────────
+MPV_PID=""
+VISUALIZER_PID=""
+
+cleanup() {
+  # Kill visualizer if running
+  if [ -n "$VISUALIZER_PID" ] && kill -0 "$VISUALIZER_PID" 2>/dev/null; then
+    kill "$VISUALIZER_PID" 2>/dev/null
+    wait "$VISUALIZER_PID" 2>/dev/null
+  fi
+  # Kill mpv if running
+  if [ -n "$MPV_PID" ] && kill -0 "$MPV_PID" 2>/dev/null; then
+    kill "$MPV_PID" 2>/dev/null
+    wait "$MPV_PID" 2>/dev/null
+  fi
+  # Restore cursor and clear line
+  printf "\033[?25h\033[2K"
+  rm -f /tmp/audioshell_mpv_ipc_$$ 2>/dev/null
+}
+
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+
+# ─── Helper functions ─────────────────────────────────────────────────────────
+print_header() {
+  echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_error() {
+  echo -e "${RED}✗ $1${NC}"
+}
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+print_banner() {
+  echo -e "${PINK}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${BRIGHT_PINK} *"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK} █████╗ ██╗   ██╗██████╗ ██╗ ██████╗ ${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██╗██║   ██║██╔══██╗██║██╔═══██╗${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}███████║██║   ██║██║  ██║██║██║   ██║${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██║██║   ██║██║  ██║██║██║   ██║${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██║  ██║╚██████╔╝██████╔╝██║╚██████╔╝${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝ ╚═════╝ ${NC}                ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗██╗  ██╗███████╗██╗     ██╗     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔════╝██║  ██║██╔════╝██║     ██║     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗███████║█████╗  ██║     ██║     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚════██║██╔══██║██╔══╝  ██║     ██║     ${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████║██║  ██║███████╗███████╗███████╗${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝${NC}             ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${BRIGHT_PINK} *${NC}"
+  echo ""
+}
+
+# ─── Now-Playing Visualizer ───────────────────────────────────────────────────
+# Animated playback display with dancing music symbols and colored metadata
+run_visualizer() {
+  local station_name="$1"
+  local ipc_socket="$2"
+
+  # Music symbol sets for dancing animation
+  local -a music_left=('♪' '♫' '♬' '♩' '♪' '♫' '♬' '♩')
+  local -a music_right=('♫' '♬' '♩' '♪' '♫' '♬' '♩' '♪')
+  local -a bounce=('⠁' '⠂' '⠄' '⡀' '⠄' '⠂' '⠁' '⠈' '⠐' '⠠' '⠐' '⠈')
+  local -a bars=('▁' '▂' '▃' '▄' '▅' '▆' '▇' '█' '▇' '▆' '▅' '▄' '▃' '▂')
+  local -a color_cycle=("$BRIGHT_PINK" "$HOT_PINK" "$PURPLE" "$SKY_BLUE" "$CYAN" "$LIME" "$GOLD" "$ORANGE")
+
+  local frame=0
+  local prev_title=""
+  local title=""
+  local artist=""
+  local display_title=""
+
+  printf "\033[?25l"  # hide cursor
+
+  while true; do
+    # Query mpv for metadata via IPC socket
+    if [ -S "$ipc_socket" ]; then
+      local raw_title raw_artist
+      raw_title=$(echo '{"command":["get_property","media-title"]}' | socat - "$ipc_socket" 2>/dev/null | sed -n 's/.*"data":"\([^"]*\)".*/\1/p')
+      raw_artist=$(echo '{"command":["get_property","metadata/by-key/artist"]}' | socat - "$ipc_socket" 2>/dev/null | sed -n 's/.*"data":"\([^"]*\)".*/\1/p')
+
+      if [ -n "$raw_title" ]; then
+        # Some streams put "Artist - Title" in the title field
+        if [ -z "$raw_artist" ] && [[ "$raw_title" == *" - "* ]]; then
+          artist="${raw_title%% - *}"
+          title="${raw_title#* - }"
+        elif [ -n "$raw_artist" ]; then
+          artist="$raw_artist"
+          title="$raw_title"
+        else
+          artist=""
+          title="$raw_title"
+        fi
+      fi
+    fi
+
+    # Build the animated display
+    local ci=$((frame % ${#color_cycle[@]}))
+    local mi_l=$((frame % ${#music_left[@]}))
+    local mi_r=$(( (frame + 4) % ${#music_right[@]} ))
+    local bi=$((frame % ${#bars[@]}))
+    local bi2=$(( (frame + 3) % ${#bars[@]}))
+    local bi3=$(( (frame + 7) % ${#bars[@]}))
+    local bi4=$(( (frame + 5) % ${#bars[@]}))
+    local bi5=$(( (frame + 10) % ${#bars[@]}))
+
+    local c1="${color_cycle[$ci]}"
+    local c2="${color_cycle[$(( (ci + 2) % ${#color_cycle[@]} ))]}"
+    local c3="${color_cycle[$(( (ci + 4) % ${#color_cycle[@]} ))]}"
+    local c4="${color_cycle[$(( (ci + 6) % ${#color_cycle[@]} ))]}"
+
+    # Equalizer bars animation
+    local eq="${c1}${bars[$bi]}${c2}${bars[$bi2]}${c3}${bars[$bi3]}${c4}${bars[$bi4]}${c1}${bars[$bi5]}${NC}"
+
+    # Dancing music notes
+    local note_l="${c2}${music_left[$mi_l]}${NC}"
+    local note_r="${c3}${music_right[$mi_r]}${NC}"
+
+    # Build now-playing line
+    local now_playing=""
+    if [ -n "$artist" ] && [ -n "$title" ]; then
+      now_playing="${GOLD}${BOLD}${artist}${NC} ${CYAN}-${NC} ${PURPLE}${ITALIC}${title}${NC}"
+    elif [ -n "$title" ]; then
+      now_playing="${PURPLE}${ITALIC}${title}${NC}"
+    else
+      now_playing="${YELLOW}Connecting...${NC}"
+    fi
+
+    # Move cursor up and redraw (3 lines: separator, station, now-playing)
+    if [ "$frame" -gt 0 ]; then
+      printf "\033[3A"
+    fi
+
+    printf "\033[2K  ${note_l} ${eq} ${note_r}  ${c1}${music_left[$(( (frame+2) % ${#music_left[@]} ))]}${NC} ${eq} ${c4}${music_right[$(( (frame+1) % ${#music_right[@]} ))]}${NC}  ${note_l} ${eq} ${note_r}\n"
+    printf "\033[2K  ${c1}▶${NC}  ${GREEN}${BOLD}${station_name}${NC}\n"
+    printf "\033[2K     ${now_playing}\n"
+
+    frame=$((frame + 1))
+    sleep 0.3
+  done
+}
+
+# ─── Play station ─────────────────────────────────────────────────────────────
+play_station() {
+  local station_name="$1"
+  local station_url="${STATION_URLS[$station_name]}"
+  local ipc_socket="/tmp/audioshell_mpv_ipc_$$"
+
+  clear
+  echo ""
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
+  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Now Playing *${NC}                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${GREEN}Station:${NC} ${BOLD}${station_name}${NC}$(printf '%*s' $((44 - ${#station_name})) '')${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${YELLOW}Press ${BOLD}q${NC}${YELLOW} to stop and return to menu${NC}                   ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${YELLOW}Press ${BOLD}9${NC}${YELLOW}/${BOLD}0${NC}${YELLOW} to adjust volume${NC}                           ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${YELLOW}Press ${BOLD}m${NC}${YELLOW} to mute/unmute${NC}                               ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+  echo ""
+
+  # Start mpv in background with IPC socket for metadata queries
+  mpv --no-video --really-quiet \
+    --input-ipc-server="$ipc_socket" \
+    --term-osd-bar \
+    "$station_url" &
+  MPV_PID=$!
+
+  # Give mpv a moment to create the socket
+  sleep 1
+
+  # Start the visualizer in background
+  run_visualizer "$station_name" "$ipc_socket" &
+  VISUALIZER_PID=$!
+
+  # Wait for mpv to finish (user presses q in terminal or mpv dies)
+  wait "$MPV_PID" 2>/dev/null
+  MPV_PID=""
+
+  # Kill visualizer
+  if [ -n "$VISUALIZER_PID" ] && kill -0 "$VISUALIZER_PID" 2>/dev/null; then
+    kill "$VISUALIZER_PID" 2>/dev/null
+    wait "$VISUALIZER_PID" 2>/dev/null
+  fi
+  VISUALIZER_PID=""
+
+  printf "\033[?25h"  # restore cursor
+  rm -f "$ipc_socket" 2>/dev/null
+}
+
+# ─── Station list menu ────────────────────────────────────────────────────────
+show_menu() {
+  clear
+  print_banner
+
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
+  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Internet Radio Stations *${NC}                           ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+
+  local i=1
+  for name in "${STATION_NAMES[@]}"; do
+    local num
+    num=$(printf "%2d" "$i")
+    local pad=$((47 - ${#name}))
+    if [ "$pad" -lt 0 ]; then pad=0; fi
+    printf "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}%s)${NC} ${BOLD}%s${NC}%*s${CYAN}${ITALIC}║${NC}\n" "$num" "$name" "$pad" ""
+    i=$((i + 1))
+  done
+
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED} 0)${NC} Exit                                           ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+  echo ""
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+main() {
+  # Check dependencies
+  if ! command -v mpv &>/dev/null; then
+    print_error "mpv is not installed. Install it with: sudo pacman -S mpv"
+    exit 1
+  fi
+
+  if ! command -v socat &>/dev/null; then
+    print_warning "socat not found. Metadata display will be limited."
+    print_warning "Install with: sudo pacman -S socat"
+    echo ""
+  fi
+
+  local total=${#STATION_NAMES[@]}
+
+  while true; do
+    show_menu
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select station [0-${total}]:${NC} ")" choice
+
+    if [ "$choice" == "0" ]; then
+      echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
+      exit 0
+    fi
+
+    # Validate numeric input
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$total" ]; then
+      print_error "Invalid option"
+      sleep 1
+      continue
+    fi
+
+    local idx=$((choice - 1))
+    local selected="${STATION_NAMES[$idx]}"
+    play_station "$selected"
+  done
+}
+
+main "$@"
