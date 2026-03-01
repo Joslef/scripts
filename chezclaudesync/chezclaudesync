@@ -1,0 +1,63 @@
+#!/usr/bin/env fish
+
+# Sync Claude Code configuration files to chezmoi.
+# Tracks settings, agents, hooks, statusline, and per-project memory files.
+# Excludes all secrets, session data, and ephemeral files.
+
+set -l claude_dir "$HOME/.claude"
+
+# Fixed files to always sync
+set -l fixed_files \
+    settings.json \
+    settings.local.json \
+    statusline-command.sh
+
+# Fixed directories to sync (all files within)
+set -l fixed_dirs \
+    agents \
+    hooks
+
+# Track whether anything was added
+set -l added 0
+
+# Sync fixed files
+for f in $fixed_files
+    set -l path "$claude_dir/$f"
+    if test -f "$path"
+        chezmoi add "$path" 2>/dev/null
+        and set added (math $added + 1)
+    end
+end
+
+# Sync fixed directories
+for d in $fixed_dirs
+    set -l dir "$claude_dir/$d"
+    if test -d "$dir"
+        for f in $dir/*
+            if test -f "$f"
+                chezmoi add "$f" 2>/dev/null
+                and set added (math $added + 1)
+            end
+        end
+    end
+end
+
+# Sync per-project MEMORY.md files
+for memfile in $claude_dir/projects/*/memory/MEMORY.md
+    if test -f "$memfile"
+        chezmoi add "$memfile" 2>/dev/null
+        and set added (math $added + 1)
+    end
+end
+
+# Sync agent-memory files
+for memdir in $claude_dir/agent-memory/*/
+    for f in $memdir*.md
+        if test -f "$f"
+            chezmoi add "$f" 2>/dev/null
+            and set added (math $added + 1)
+        end
+    end
+end
+
+echo "chezclaudesync: synced $added file(s) to chezmoi"
