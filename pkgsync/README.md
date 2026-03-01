@@ -77,6 +77,24 @@ Authenticate the GitHub CLI before running pkgsync for the first time:
 gh auth login
 ```
 
+## 🖥️ Restoring Packages on a New Machine
+
+To recreate your package set on a fresh Arch installation, clone your GitHub package-list repo and replay both lists.
+
+```bash
+# 1. Clone the repo containing your saved package lists
+git clone https://github.com/your-username/your-pkglist-repo
+cd your-pkglist-repo
+
+# 2. Install all native (official repo) packages
+sudo pacman -S --needed - < pkglist-native.txt
+
+# 3. Install AUR packages — requires an AUR helper (e.g. yay or paru)
+yay -S --needed - < pkglist-aur.txt
+```
+
+Install your AUR helper (e.g. `yay`) before running step 3; it is not available via pacman by default.
+
 ## 🖥️ Requirements
 
 - Arch Linux (or an Arch-based distro)
