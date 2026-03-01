@@ -56,13 +56,13 @@ print_banner() {
 }
 
 confirm() {
-  read -r -p "$1 [y/N]: " response
+  read -r -p "$1 [Y/n]: " response
   case "$response" in
-  [yY][eE][sS] | [yY])
-    true
+  [nN][oO] | [nN])
+    false
     ;;
   *)
-    false
+    true
     ;;
   esac
 }
@@ -88,6 +88,7 @@ do_orphans() {
 
   if ! orphans=$(pacman -Qtdq 2>/dev/null) || [ -z "$orphans" ]; then
     print_success "No orphan packages found"
+    read -r -p "Press Enter to continue..." || true
     return 0
   fi
 
@@ -100,6 +101,7 @@ do_orphans() {
   else
     print_warning "Orphans kept"
   fi
+  read -r -p "Press Enter to continue..." || true
 }
 
 # FIXED: Shows current cache status and actual paccache output
@@ -117,7 +119,7 @@ do_cache() {
 
   # Show current cache size first
   echo "Current cache status:"
-  echo "  Packages in cache: $(ls /var/cache/pacman/pkg/*.pkg.tar* 2>/dev/null | wc -l)"
+  echo "  Packages in cache: $(find /var/cache/pacman/pkg -maxdepth 1 -name '*.pkg.tar*' 2>/dev/null | wc -l)"
   echo "  Cache size: $(du -sh /var/cache/pacman/pkg/ 2>/dev/null | cut -f1)"
   echo ""
 
@@ -128,7 +130,7 @@ do_cache() {
   echo "  4) Dry run (preview only)"
   echo "  5) Skip"
 
-  read -r -p "Select option [1-5]: " choice
+  read -r -p "Select option [1-5]: " choice || true
 
   case $choice in
   1)
@@ -137,7 +139,7 @@ do_cache() {
     sudo paccache -rv
     echo ""
     print_success "Cache cleanup completed"
-    read -r -p "Press Enter to continue..."
+    read -r -p "Press Enter to continue..." || true
     ;;
   2)
     if confirm "This keeps only 1 version. Continue?"; then
@@ -146,8 +148,10 @@ do_cache() {
       sudo paccache -rvk1
       echo ""
       print_success "Cache cleanup completed"
-      read -r -p "Press Enter to continue..."
+    else
+      print_warning "Cache cleanup skipped"
     fi
+    read -r -p "Press Enter to continue..." || true
     ;;
   3)
     if confirm "Remove ALL cached versions of uninstalled packages?"; then
@@ -156,18 +160,20 @@ do_cache() {
       sudo paccache -rvuk0
       echo ""
       print_success "Uninstalled packages removed from cache"
-      read -r -p "Press Enter to continue..."
+    else
+      print_warning "Cache cleanup skipped"
     fi
+    read -r -p "Press Enter to continue..." || true
     ;;
   4)
     echo ""
     echo "Dry run - packages that would be removed:"
     paccache -dv
-    read -r -p "Press Enter to continue..."
+    read -r -p "Press Enter to continue..." || true
     ;;
   *)
     print_warning "Cache cleanup skipped"
-    read -r -p "Press Enter to continue..."
+    read -r -p "Press Enter to continue..." || true
     ;;
   esac
 }
@@ -181,7 +187,7 @@ do_db_check() {
     else
       print_error "Database issues found (see above)"
     fi
-    read -r -p "Press Enter to continue..."
+    read -r -p "Press Enter to continue..." || true
   fi
 }
 
@@ -190,7 +196,7 @@ do_foreign() {
 
   if ! foreign=$(pacman -Qm 2>/dev/null) || [ -z "$foreign" ]; then
     print_success "No foreign packages"
-    read -r -p "Press Enter to continue..."
+    read -r -p "Press Enter to continue..." || true
     return 0
   fi
 
@@ -198,10 +204,11 @@ do_foreign() {
   echo "$foreign"
   count=$(echo "$foreign" | wc -l)
   print_warning "$count foreign packages found (review manually if needed)"
-  read -r -p "Press Enter to continue..."
+  read -r -p "Press Enter to continue..." || true
 }
 
 do_info() {
+  local interactive=${1:-true}
   print_header "System Info"
   echo "Disk usage:"
   df -h / | tail -1
@@ -213,12 +220,11 @@ do_info() {
   echo "  Foreign: $(pacman -Qm 2>/dev/null | wc -l)"
 
   if command -v paccache &>/dev/null; then
-    # Count packages in cache directory directly
     local cache_count
-    cache_count=$(ls /var/cache/pacman/pkg/*.pkg.tar* 2>/dev/null | wc -l) || cache_count=0
+    cache_count=$(find /var/cache/pacman/pkg -maxdepth 1 -name '*.pkg.tar*' 2>/dev/null | wc -l)
     echo "  Cache packages: $cache_count"
   fi
-  read -r -p "Press Enter to continue..."
+  [[ "$interactive" == true ]] && read -r -p "Press Enter to continue..." || true
 }
 
 do_quick() {
@@ -228,18 +234,18 @@ do_quick() {
   sudo pacman -Syu --needed --noconfirm
 
   if orphans=$(pacman -Qtdq 2>/dev/null) && [ -n "$orphans" ]; then
-    echo "$orphans" | xargs -r sudo pacman -Rns -- --noconfirm
+    echo "$orphans" | xargs -r sudo pacman -Rns --noconfirm --
   fi
 
   if command -v paccache &>/dev/null; then
-    paccache -r 2>/dev/null || true
+    sudo paccache -r 2>/dev/null || true
   fi
 
-  if pacman -Dk 2>&1 | grep -qi "error"; then
+  if ! pacman -Dk &>/dev/null; then
     print_warning "Database issues detected (run full check for details)"
   fi
 
-  do_info
+  do_info false
 }
 
 show_menu() {
@@ -273,7 +279,7 @@ main() {
 
   while true; do
     show_menu
-    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-8]:${NC} ")" choice
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-8]:${NC} ")" choice || true
 
     case $choice in
     1) do_update ;;
@@ -284,7 +290,7 @@ main() {
     6) do_info ;;
     7)
       do_quick
-      read -r -p "Press Enter to continue..."
+      read -r -p "Press Enter to continue..." || true
       ;;
     8)
       do_update
@@ -293,7 +299,7 @@ main() {
       do_db_check
       do_foreign
       do_info
-      read -r -p "Press Enter to continue..."
+      read -r -p "Press Enter to continue..." || true
       ;;
     0)
       echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
