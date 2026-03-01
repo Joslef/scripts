@@ -53,33 +53,35 @@ declare -a STATION_NAMES=(
   "zerobeat"
 )
 
-declare -A STATION_URLS=(
-  ["dronezone"]="http://api.somafm.com/dronezone.pls"
-  ["groovesalad"]="http://api.somafm.com/groovesalad.pls"
-  ["deepspaceone"]="http://api.somafm.com/deepspaceone.pls"
-  ["spacestation"]="http://api.somafm.com/spacestation.pls"
-  ["anotherplanet"]="http://stream.anotherplanet.fm:8000/stream.mp3"
-  ["psyradio"]="http://host.psyradio.fm:8020/;listen.mp3"
-  ["egochillout"]="https://streams.egofm.de/egoCHILLOUT-hq"
-  ["egosun"]="https://streams.egofm.de/egoSUN-hq"
-  ["egoflash"]="https://streams.egofm.de/egoFLASH-hq"
-  ["egofm"]="https://streams.egofm.de/egoFM-hq"
-  ["sleepingpill"]="http://s.stereoscenic.com/asp-h.pls"
-  ["schizoid"]="http://schizoid.in/schizoid-chill.pls"
-  ["costadelmar"]="https://radio4.cdm-radio.com:18020/stream-mp3-Chill"
-  ["amambient"]="http://radio.stereoscenic.com/ama-h"
-  ["zerobeat"]="http://zerobeatzone.mrg.fm:8800/stream3"
-  ["ambientradio"]="http://listen.mrg.fm:8888/stream"
-  ["egorap"]="https://streams.egofm.de/egoRAP-hq"
-  ["cliqhop"]="http://api.somafm.com/cliqhop.pls"
-  ["defcon"]="http://api.somafm.com/defcon.pls"
-  ["dubstep"]="http://api.somafm.com/dubstep.pls"
-  ["groovesaladclassic"]="http://api.somafm.com/gsclassic.pls"
-  ["missioncontrol"]="http://api.somafm.com/missioncontrol.pls"
-  ["secretagent"]="http://api.somafm.com/secretagent.pls"
-  ["seventies"]="http://api.somafm.com/seventies.pls"
-  ["synphaer"]="http://api.somafm.com/synphaera.pls"
-)
+get_station_url() {
+  case "$1" in
+    dronezone)          echo "http://api.somafm.com/dronezone.pls" ;;
+    groovesalad)        echo "http://api.somafm.com/groovesalad.pls" ;;
+    deepspaceone)       echo "http://api.somafm.com/deepspaceone.pls" ;;
+    spacestation)       echo "http://api.somafm.com/spacestation.pls" ;;
+    anotherplanet)      echo "http://stream.anotherplanet.fm:8000/stream.mp3" ;;
+    psyradio)           echo "http://host.psyradio.fm:8020/;listen.mp3" ;;
+    egochillout)        echo "https://streams.egofm.de/egoCHILLOUT-hq" ;;
+    egosun)             echo "https://streams.egofm.de/egoSUN-hq" ;;
+    egoflash)           echo "https://streams.egofm.de/egoFLASH-hq" ;;
+    egofm)              echo "https://streams.egofm.de/egoFM-hq" ;;
+    sleepingpill)       echo "http://s.stereoscenic.com/asp-h.pls" ;;
+    schizoid)           echo "http://schizoid.in/schizoid-chill.pls" ;;
+    costadelmar)        echo "https://radio4.cdm-radio.com:18020/stream-mp3-Chill" ;;
+    amambient)          echo "http://radio.stereoscenic.com/ama-h" ;;
+    zerobeat)           echo "http://zerobeatzone.mrg.fm:8800/stream3" ;;
+    ambientradio)       echo "http://listen.mrg.fm:8888/stream" ;;
+    egorap)             echo "https://streams.egofm.de/egoRAP-hq" ;;
+    cliqhop)            echo "http://api.somafm.com/cliqhop.pls" ;;
+    defcon)             echo "http://api.somafm.com/defcon.pls" ;;
+    dubstep)            echo "http://api.somafm.com/dubstep.pls" ;;
+    groovesaladclassic) echo "http://api.somafm.com/gsclassic.pls" ;;
+    missioncontrol)     echo "http://api.somafm.com/missioncontrol.pls" ;;
+    secretagent)        echo "http://api.somafm.com/secretagent.pls" ;;
+    seventies)          echo "http://api.somafm.com/seventies.pls" ;;
+    synphaer)           echo "http://api.somafm.com/synphaera.pls" ;;
+  esac
+}
 
 # ─── Cleanup on exit ─────────────────────────────────────────────────────────
 MPV_PID=""
@@ -98,7 +100,7 @@ cleanup() {
   fi
   # Restore cursor and clear line
   printf "\033[?25h\033[2K"
-  rm -f /tmp/audioshell_mpv_ipc_$$ 2>/dev/null
+  rm -f /tmp/audioshell_mpv_ipc_$$ /tmp/audioshell_meta_$$ /tmp/audioshell_meta_$$.lua 2>/dev/null
 }
 
 trap cleanup EXIT
@@ -148,7 +150,7 @@ print_banner() {
 # Animated playback display with dancing music symbols and colored metadata
 run_visualizer() {
   local station_name="$1"
-  local ipc_socket="$2"
+  local meta_file="$2"
 
   # Music symbol sets for dancing animation
   local -a music_left=('♪' '♫' '♬' '♩' '♪' '♫' '♬' '♩')
@@ -166,11 +168,11 @@ run_visualizer() {
   printf "\033[?25l"  # hide cursor
 
   while true; do
-    # Query mpv for metadata via IPC socket
-    if [ -S "$ipc_socket" ]; then
+    # Read metadata written by the mpv Lua hook
+    if [ -f "$meta_file" ]; then
       local raw_title raw_artist
-      raw_title=$(echo '{"command":["get_property","media-title"]}' | socat - "$ipc_socket" 2>/dev/null | sed -n 's/.*"data":"\([^"]*\)".*/\1/p')
-      raw_artist=$(echo '{"command":["get_property","metadata/by-key/artist"]}' | socat - "$ipc_socket" 2>/dev/null | sed -n 's/.*"data":"\([^"]*\)".*/\1/p')
+      raw_title=$(sed -n '1p' "$meta_file" 2>/dev/null)
+      raw_artist=$(sed -n '2p' "$meta_file" 2>/dev/null)
 
       if [ -n "$raw_title" ]; then
         # Some streams put "Artist - Title" in the title field
@@ -236,8 +238,23 @@ run_visualizer() {
 # ─── Play station ─────────────────────────────────────────────────────────────
 play_station() {
   local station_name="$1"
-  local station_url="${STATION_URLS[$station_name]}"
-  local ipc_socket="/tmp/audioshell_mpv_ipc_$$"
+  local station_url
+  station_url=$(get_station_url "$station_name")
+  local meta_file="/tmp/audioshell_meta_$$"
+  local lua_script="/tmp/audioshell_meta_$$.lua"
+
+  # Write a small Lua hook that updates the metadata file whenever track info changes
+  cat > "$lua_script" << 'LUAEOF'
+local f = os.getenv("AUDIOSHELL_META_FILE")
+local function write_meta()
+  local title  = mp.get_property("media-title") or ""
+  local artist = mp.get_property("metadata/by-key/artist") or ""
+  local fh = io.open(f, "w")
+  if fh then fh:write(title .. "\n" .. artist .. "\n"); fh:close() end
+end
+mp.observe_property("media-title",              "string", write_meta)
+mp.observe_property("metadata/by-key/artist",   "string", write_meta)
+LUAEOF
 
   clear
   echo ""
@@ -254,18 +271,18 @@ play_station() {
   echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
   echo ""
 
-  # Start mpv in background with IPC socket for metadata queries
-  mpv --no-video --really-quiet \
-    --input-ipc-server="$ipc_socket" \
+  # Start mpv in background with Lua hook for metadata
+  AUDIOSHELL_META_FILE="$meta_file" mpv --no-video --really-quiet \
+    --script="$lua_script" \
     --term-osd-bar \
     "$station_url" &
   MPV_PID=$!
 
-  # Give mpv a moment to create the socket
+  # Give mpv a moment to connect and write initial metadata
   sleep 1
 
   # Start the visualizer in background
-  run_visualizer "$station_name" "$ipc_socket" &
+  run_visualizer "$station_name" "$meta_file" &
   VISUALIZER_PID=$!
 
   # Wait for mpv to finish (user presses q in terminal or mpv dies)
@@ -280,7 +297,7 @@ play_station() {
   VISUALIZER_PID=""
 
   printf "\033[?25h"  # restore cursor
-  rm -f "$ipc_socket" 2>/dev/null
+  rm -f "$meta_file" "$lua_script" 2>/dev/null
 }
 
 # ─── Station list menu ────────────────────────────────────────────────────────
@@ -316,12 +333,6 @@ main() {
   if ! command -v mpv &>/dev/null; then
     print_error "mpv is not installed. Install it with: sudo pacman -S mpv"
     exit 1
-  fi
-
-  if ! command -v socat &>/dev/null; then
-    print_warning "socat not found. Metadata display will be limited."
-    print_warning "Install with: sudo pacman -S socat"
-    echo ""
   fi
 
   local total=${#STATION_NAMES[@]}
