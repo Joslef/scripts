@@ -200,7 +200,7 @@ try_advance_frame() {
   # Returns 0 if frame was advanced, 1 if not (used by caller to decide redraw)
   [ "$DISCO" -eq 0 ] && return 1
   if [ -n "${EPOCHREALTIME+x}" ]; then
-    local e="${EPOCHREALTIME}" s f ms
+    local e="${EPOCHREALTIME/,/.}" s f ms
     s="${e%.*}"; f="${e#*.}"
     ms=$(( s * 1000 + 10#${f:0:3} ))
     [ $(( ms - LAST_ANIM_MS )) -lt 300 ] && return 1
