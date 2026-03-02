@@ -27,9 +27,13 @@ gitstatus
 # Interactive menu (scans a specific directory)
 gitstatus ~/projects
 
-# Non-interactive scan and exit
+# Non-interactive scan and exit (all repos)
 gitstatus --scan ~/projects
 gitstatus -s ~/projects
+
+# Non-interactive scan, dirty repos only
+gitstatus --scan --dirty ~/projects
+gitstatus -s -d ~/projects
 ```
 
 ## 📋 Menu Options
@@ -40,6 +44,13 @@ gitstatus -s ~/projects
 | `2` | Scan repos in a custom path |
 | `3` | Toggle dirty-repos-only filter |
 | `0` | Exit |
+
+### Non-interactive flags
+
+| Flag | Description |
+|------|-------------|
+| `--scan` / `-s` | Run a scan and exit (no menu) |
+| `--dirty` / `-d` | (after `--scan`) Show dirty repos only |
 
 ## 🎨 Output Key
 
