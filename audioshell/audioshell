@@ -413,7 +413,10 @@ main() {
         ;;
     esac
 
+    local prev_title="$PLAY_TITLE"
+    local prev_artist="$PLAY_ARTIST"
     update_metadata
+    [ "$PLAY_TITLE" != "$prev_title" ] || [ "$PLAY_ARTIST" != "$prev_artist" ] && need_redraw=1
     try_advance_frame && need_redraw=1
 
     [ "$need_redraw" -eq 1 ] && draw_screen
