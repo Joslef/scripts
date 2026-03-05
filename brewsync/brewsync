@@ -1,0 +1,910 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# ─── Colors (matching ~/scripts style) ────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+ITALIC='\033[3m'
+NC='\033[0m'
+
+PINK='\033[38;5;198m'
+BRIGHT_PINK='\033[38;5;201m'
+HOT_PINK='\033[38;5;205m'
+
+# ─── Config ───────────────────────────────────────────────────────────────────
+CONFIG_DIR="$HOME/.config/brewsync"
+CONFIG_FILE="$CONFIG_DIR/config"
+LAUNCHD_DIR="$HOME/Library/LaunchAgents"
+PLIST_LABEL="com.brewsync.timer"
+PLIST_FILE="$LAUNCHD_DIR/${PLIST_LABEL}.plist"
+
+REPO_DIR=""
+REMOTE_URL=""
+
+# Resolve script's own absolute path (for embedding in plists)
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+
+# ─── Config persistence ──────────────────────────────────────────────────────
+save_config() {
+  mkdir -p "$CONFIG_DIR"
+  cat > "$CONFIG_FILE" <<EOF
+REPO_DIR="$REPO_DIR"
+REMOTE_URL="$REMOTE_URL"
+EOF
+}
+
+load_config() {
+  mkdir -p "$CONFIG_DIR"
+  if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+  fi
+}
+
+# Validate config and prompt for missing/invalid values
+ensure_config() {
+  local needs_save=0
+
+  # Check REPO_DIR
+  if [ -z "$REPO_DIR" ] || [ ! -d "$REPO_DIR" ]; then
+    if [ -n "$REPO_DIR" ] && [ ! -d "$REPO_DIR" ]; then
+      echo -e "${RED}✗ Save path does not exist: ${REPO_DIR}${NC}"
+    fi
+    echo ""
+    read -r -e -p "$(echo -e "${BRIGHT_PINK}Enter path for package lists: ~/${NC}")" repo_suffix
+    clear_up 2
+    if [ -z "$repo_suffix" ]; then
+      echo -e "${RED}✗ No path provided. Exiting.${NC}"
+      exit 1
+    fi
+    # Strip leading slashes/tildes from user input
+    repo_suffix="${repo_suffix#/}"
+    repo_suffix="${repo_suffix#\~/}"
+    REPO_DIR="$HOME/$repo_suffix"
+    mkdir -p "$REPO_DIR"
+    if [ ! -d "$REPO_DIR/.git" ]; then
+      git -C "$REPO_DIR" init
+    fi
+    needs_save=1
+  fi
+
+  # Check REMOTE_URL
+  if [ -z "$REMOTE_URL" ]; then
+    echo ""
+    read -r -p "$(echo -e "${BRIGHT_PINK}Enter GitHub repo URL (https://github.com/...):${NC} ")" REMOTE_URL
+    clear_up 2
+    if [ -z "$REMOTE_URL" ]; then
+      echo -e "${RED}✗ No repo URL provided. Exiting.${NC}"
+      exit 1
+    fi
+    if [[ "$REMOTE_URL" != *.git ]]; then
+      REMOTE_URL="${REMOTE_URL}.git"
+    fi
+
+    # Validate GitHub access
+    local owner_repo
+    owner_repo=$(echo "$REMOTE_URL" | sed -E 's#.*github\.com[/:]##; s#\.git$##')
+    if [ -z "$owner_repo" ]; then
+      echo -e "${RED}✗ Cannot parse repo from URL: ${REMOTE_URL}${NC}"
+      REMOTE_URL=""
+      save_config
+      exit 1
+    fi
+
+    if command -v gh &>/dev/null; then
+      if ! gh repo view "$owner_repo" &>/dev/null; then
+        echo -e "${RED}✗ Cannot access ${owner_repo}. Run 'gh auth login' first.${NC}"
+        REMOTE_URL=""
+        save_config
+        exit 1
+      fi
+    fi
+
+    needs_save=1
+  fi
+
+  if [ "$needs_save" -eq 1 ]; then
+    save_config
+    echo -e "${GREEN}✓ Configuration saved to ${CONFIG_FILE}${NC}"
+    echo ""
+  fi
+}
+
+# ─── Helper functions ─────────────────────────────────────────────────────────
+print_header() {
+  echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_error() {
+  echo -e "${RED}✗ $1${NC}"
+}
+
+# Clear N lines above cursor (makes prompts ephemeral — next output reuses the line)
+clear_up() {
+  local n="${1:-1}"
+  for ((i=0; i<n; i++)); do
+    printf '\033[A\033[2K'
+  done
+  printf '\r'
+}
+
+confirm() {
+  read -r -p "$1 [y/N]: " response || true
+  clear_up 1
+  case "$response" in
+    [yY][eE][sS]|[yY]) true ;;
+    *) false ;;
+  esac
+}
+
+# Pad and print a line inside the cyan box (55 visible chars between ║ ║)
+box_line() {
+  local text="$1"
+  local color="${2:-$NC}"
+  local pad=$((55 - 2 - ${#text}))
+  if [ "$pad" -lt 0 ]; then pad=0; fi
+  printf "    ${CYAN}${ITALIC}║${NC}  ${color}%s${NC}%*s${CYAN}${ITALIC}║${NC}\n" "$text" "$pad" ""
+}
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+print_banner() {
+  echo -e "${PINK}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${BRIGHT_PINK} *"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██████╗ ██████╗ ███████╗██╗    ██╗${NC}                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██╗██╔══██╗██╔════╝██║    ██║${NC}                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██████╔╝██████╔╝█████╗  ██║ █╗ ██║${NC}                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔══██╗██╔══██╗██╔══╝  ██║███╗██║${NC}                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██████╔╝██║  ██║███████╗╚███╔███╔╝${NC}                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚═════╝ ╚═╝  ╚═╝╚══════╝ ╚══╝╚══╝ ${NC}                   ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗██╗   ██╗███╗   ██╗ ██████╗${NC}                  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝${NC}                  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗ ╚████╔╝ ██╔██╗ ██║██║     ${NC}                  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚════██║  ╚██╔╝  ██║╚██╗██║██║     ${NC}                  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████║   ██║   ██║ ╚████║╚██████╗${NC}                  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝${NC}                  ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                       ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${BRIGHT_PINK} *${NC}"
+  echo ""
+}
+
+# ─── Core: generate package lists, commit & push if changed ───────────────────
+do_sync() (
+  cd "$REPO_DIR" || { echo "ERROR: Cannot cd to $REPO_DIR"; exit 1; }
+
+  # Ensure remote is correct
+  if ! git remote get-url origin &>/dev/null; then
+    git remote add origin "$REMOTE_URL"
+  else
+    git remote set-url origin "$REMOTE_URL"
+  fi
+
+  # Generate package lists
+  if ! command -v brew &>/dev/null; then
+    echo "ERROR: brew not found"
+    exit 1
+  fi
+
+  brew list --formula -1 | sort > brewlist-formula.txt
+  brew list --cask -1 | sort > brewlist-cask.txt
+
+  # Mac App Store apps (optional — only if mas is installed)
+  if command -v mas &>/dev/null; then
+    mas list | sort > maslist.txt
+  else
+    # Create empty file if mas is not installed to keep git clean
+    if [ ! -f maslist.txt ]; then
+      touch maslist.txt
+    fi
+  fi
+
+  # Stage and check for changes
+  git add brewlist-formula.txt brewlist-cask.txt maslist.txt
+  if git diff --cached --quiet; then
+    echo "No changes detected."
+    exit 0
+  fi
+
+  # Commit with timestamp, push
+  local timestamp
+  timestamp=$(date +"%Y-%m-%d_%H-%M")
+  git commit -m "$timestamp"
+  git push -u origin main || { echo "ERROR: git push failed"; exit 1; }
+  echo "Pushed changes: $timestamp"
+)
+
+# ─── launchd helpers ──────────────────────────────────────────────────────────
+write_plist() {
+  local interval="$1"
+  mkdir -p "$LAUNCHD_DIR"
+
+  cat > "$PLIST_FILE" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${SCRIPT_PATH}</string>
+        <string>--run</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>${interval}</integer>
+    <key>StandardOutPath</key>
+    <string>${CONFIG_DIR}/brewsync.log</string>
+    <key>StandardErrorPath</key>
+    <string>${CONFIG_DIR}/brewsync.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
+EOF
+}
+
+write_plist_calendar() {
+  local hour="$1"
+  local minute="$2"
+  local weekday="${3:-}"  # empty = daily
+  mkdir -p "$LAUNCHD_DIR"
+
+  cat > "$PLIST_FILE" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${SCRIPT_PATH}</string>
+        <string>--run</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+PLISTEOF
+
+  if [ -n "$weekday" ]; then
+    cat >> "$PLIST_FILE" <<PLISTEOF
+        <key>Weekday</key>
+        <integer>${weekday}</integer>
+PLISTEOF
+  fi
+
+  cat >> "$PLIST_FILE" <<PLISTEOF
+        <key>Hour</key>
+        <integer>${hour}</integer>
+        <key>Minute</key>
+        <integer>${minute}</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${CONFIG_DIR}/brewsync.log</string>
+    <key>StandardErrorPath</key>
+    <string>${CONFIG_DIR}/brewsync.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
+PLISTEOF
+}
+
+load_agent() {
+  launchctl bootout "gui/$(id -u)" "$PLIST_FILE" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_FILE"
+  print_success "LaunchAgent loaded"
+}
+
+unload_agent() {
+  launchctl bootout "gui/$(id -u)" "$PLIST_FILE" 2>/dev/null || true
+  rm -f "$PLIST_FILE"
+  print_success "LaunchAgent unloaded and removed"
+}
+
+# ─── Status helpers ───────────────────────────────────────────────────────────
+agent_loaded() {
+  launchctl print "gui/$(id -u)/${PLIST_LABEL}" &>/dev/null
+}
+
+get_schedule_description() {
+  if [ ! -f "$PLIST_FILE" ]; then
+    echo ""
+    return
+  fi
+
+  # Check for StartInterval (hourly)
+  local interval
+  interval=$(/usr/libexec/PlistBuddy -c "Print :StartInterval" "$PLIST_FILE" 2>/dev/null)
+  if [[ "$interval" =~ ^[0-9]+$ ]]; then
+    if [ "$interval" -eq 3600 ]; then
+      echo "Every hour"
+    else
+      echo "Every $((interval / 60)) minutes"
+    fi
+    return
+  fi
+
+  # Check for StartCalendarInterval
+  local hour minute weekday
+  hour=$(/usr/libexec/PlistBuddy -c "Print :StartCalendarInterval:Hour" "$PLIST_FILE" 2>/dev/null)
+  minute=$(/usr/libexec/PlistBuddy -c "Print :StartCalendarInterval:Minute" "$PLIST_FILE" 2>/dev/null)
+  weekday=$(/usr/libexec/PlistBuddy -c "Print :StartCalendarInterval:Weekday" "$PLIST_FILE" 2>/dev/null)
+
+  if [ -n "$hour" ] && [ -n "$minute" ]; then
+    local time_str
+    time_str=$(printf "%02d:%02d" "$hour" "$minute")
+    local tz
+    tz=$(date +%Z)
+
+    if [ -n "$weekday" ]; then
+      local day_name
+      case "$weekday" in
+        1) day_name="Monday" ;; 2) day_name="Tuesday" ;; 3) day_name="Wednesday" ;;
+        4) day_name="Thursday" ;; 5) day_name="Friday" ;; 6) day_name="Saturday" ;;
+        7|0) day_name="Sunday" ;;
+        *) day_name="Day $weekday" ;;
+      esac
+      echo "Every ${day_name} at ${time_str} ${tz}"
+    else
+      echo "Every day at ${time_str} ${tz}"
+    fi
+    return
+  fi
+
+  echo "Custom schedule"
+}
+
+# Extract short repo name from URL
+short_repo() {
+  echo "$REMOTE_URL" | sed -E 's#.*github\.com[/:]##; s#\.git$##'
+}
+
+# ─── Schedule setup functions ─────────────────────────────────────────────────
+setup_hourly() {
+  write_plist 3600
+  load_agent
+  print_success "Scheduled: Every hour"
+  sleep 2
+}
+
+setup_daily() {
+  echo ""
+  read -r -p "$(echo -e "${BRIGHT_PINK}Time to run (HH:MM, 24h format) [default 04:00]:${NC} ")" time_input
+  clear_up 2
+  time_input="${time_input:-04:00}"
+
+  if ! [[ "$time_input" =~ ^([01][0-9]|2[0-3]):([0-5][0-9])$ ]]; then
+    print_error "Invalid time format. Use HH:MM (e.g. 14:30)"
+    sleep 2
+    return
+  fi
+
+  local hour="${BASH_REMATCH[1]#0}"
+  local minute="${BASH_REMATCH[2]#0}"
+  local tz
+  tz=$(date +%Z)
+
+  write_plist_calendar "$hour" "$minute"
+  load_agent
+  echo ""
+  print_success "Scheduled: Every day at ${time_input} ${tz}"
+  sleep 2
+}
+
+setup_weekly() {
+  echo ""
+  echo -e "  ${GREEN}1)${NC} Monday"
+  echo -e "  ${GREEN}2)${NC} Tuesday"
+  echo -e "  ${GREEN}3)${NC} Wednesday"
+  echo -e "  ${GREEN}4)${NC} Thursday"
+  echo -e "  ${GREEN}5)${NC} Friday"
+  echo -e "  ${GREEN}6)${NC} Saturday"
+  echo -e "  ${GREEN}7)${NC} Sunday"
+  echo ""
+  read -r -p "$(echo -e "${BRIGHT_PINK}Select weekday [1-7]:${NC} ")" day_choice
+  clear_up 10
+
+  local day_num day_name
+  case "$day_choice" in
+    1) day_num=1; day_name="Monday" ;;
+    2) day_num=2; day_name="Tuesday" ;;
+    3) day_num=3; day_name="Wednesday" ;;
+    4) day_num=4; day_name="Thursday" ;;
+    5) day_num=5; day_name="Friday" ;;
+    6) day_num=6; day_name="Saturday" ;;
+    7) day_num=0; day_name="Sunday" ;;
+    *)
+      print_error "Invalid choice"
+      sleep 2
+      return
+      ;;
+  esac
+
+  read -r -p "$(echo -e "${BRIGHT_PINK}Time to run (HH:MM, 24h format) [default 04:00]:${NC} ")" time_input
+  clear_up 1
+  time_input="${time_input:-04:00}"
+
+  if ! [[ "$time_input" =~ ^([01][0-9]|2[0-3]):([0-5][0-9])$ ]]; then
+    print_error "Invalid time format. Use HH:MM (e.g. 14:30)"
+    sleep 2
+    return
+  fi
+
+  local hour="${BASH_REMATCH[1]#0}"
+  local minute="${BASH_REMATCH[2]#0}"
+  local tz
+  tz=$(date +%Z)
+
+  write_plist_calendar "$hour" "$minute" "$day_num"
+  load_agent
+  echo ""
+  print_success "Scheduled: Every ${day_name} at ${time_input} ${tz}"
+  sleep 2
+}
+
+# ─── Change save path ────────────────────────────────────────────────────────
+change_path() {
+  print_header "Change Save Path"
+  echo -e "  Current: ${BOLD}${REPO_DIR}${NC}"
+  echo ""
+  read -r -e -p "$(echo -e "${BRIGHT_PINK}New path: ~/${NC}")" new_suffix
+  clear_up 2
+
+  if [ -z "$new_suffix" ]; then
+    print_warning "No path entered, keeping current."
+    sleep 1
+    return
+  fi
+  new_suffix="${new_suffix#/}"
+  new_suffix="${new_suffix#\~/}"
+  local new_path="$HOME/$new_suffix"
+
+  # Same path check (python3 is always present on macOS)
+  local real_new real_old
+  real_new=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$new_path")
+  real_old=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$REPO_DIR")
+  if [ "$real_new" == "$real_old" ]; then
+    print_warning "Same as current path, nothing to do."
+    sleep 1
+    return
+  fi
+
+  local old_dir="$REPO_DIR"
+
+  mkdir -p "$new_path"
+
+  if [ -d "$old_dir/.git" ]; then
+    cp -a "$old_dir/." "$new_path/"
+    print_success "Moved repo to ${new_path}"
+
+    echo ""
+    if confirm "Delete old directory ${old_dir}?"; then
+      rm -rf "$old_dir"
+      print_success "Deleted ${old_dir}"
+    else
+      print_warning "Old directory kept at ${old_dir}"
+    fi
+  else
+    cd "$new_path" || return
+    git init
+    git remote add origin "$REMOTE_URL"
+    print_success "Initialized new repo at ${new_path}"
+  fi
+
+  REPO_DIR="$new_path"
+  save_config
+  print_success "Save path updated to: ${REPO_DIR}"
+  echo ""
+  read -r -p "Press Enter to continue..." && clear_up 1
+}
+
+# ─── Change GitHub repo ──────────────────────────────────────────────────────
+change_repo() {
+  print_header "Change GitHub Repository"
+  echo -e "  Current: ${BOLD}$(short_repo)${NC}"
+  echo ""
+  read -r -p "$(echo -e "${BRIGHT_PINK}GitHub repo URL (https://github.com/...):${NC} ")" new_url
+  clear_up 2
+
+  if [ -z "$new_url" ]; then
+    print_warning "No URL entered, keeping current."
+    sleep 1
+    return
+  fi
+
+  if [[ "$new_url" != *.git ]]; then
+    new_url="${new_url}.git"
+  fi
+
+  local owner_repo
+  owner_repo=$(echo "$new_url" | sed -E 's#.*github\.com[/:]##; s#\.git$##')
+
+  if [ -z "$owner_repo" ]; then
+    print_error "Could not parse repository from URL."
+    sleep 2
+    return
+  fi
+
+  if ! command -v gh &>/dev/null; then
+    print_error "gh CLI is not installed. Install it with: brew install gh"
+    sleep 2
+    return
+  fi
+
+  echo -e "  Checking access to ${BOLD}${owner_repo}${NC}..."
+  if ! gh repo view "$owner_repo" &>/dev/null; then
+    print_error "Cannot access ${owner_repo}. Are you authenticated?"
+    echo -e "  Run ${BOLD}gh auth login${NC} to authenticate."
+    sleep 3
+    return
+  fi
+
+  REMOTE_URL="$new_url"
+  save_config
+
+  if [ -d "$REPO_DIR/.git" ]; then
+    cd "$REPO_DIR" || return
+    git remote set-url origin "$REMOTE_URL" 2>/dev/null || git remote add origin "$REMOTE_URL"
+  fi
+
+  print_success "Repository set to: ${owner_repo}"
+  echo ""
+  read -r -p "Press Enter to continue..." && clear_up 1
+}
+
+# ─── Restore from repo ────────────────────────────────────────────────────────
+do_restore() (
+  cd "$REPO_DIR" || { print_error "Cannot cd to $REPO_DIR"; return 1; }
+
+  # Ensure remote is correct and pull latest
+  if ! git remote get-url origin &>/dev/null; then
+    git remote add origin "$REMOTE_URL"
+  else
+    git remote set-url origin "$REMOTE_URL"
+  fi
+
+  echo -e "  Pulling latest from repo..."
+  if ! git pull origin main --ff-only 2>/dev/null; then
+    print_error "Failed to pull from remote"
+    echo ""
+    read -r -p "Press Enter to continue..." && clear_up 1
+    return 1
+  fi
+
+  local missing_formula="" missing_cask="" missing_mas=""
+  local count_formula=0 count_cask=0 count_mas=0
+
+  # Compare formulae
+  if [ -f brewlist-formula.txt ]; then
+    missing_formula=$(comm -23 <(sort brewlist-formula.txt) <(brew list --formula -1 | sort))
+    if [ -n "$missing_formula" ]; then
+      count_formula=$(echo "$missing_formula" | wc -l | tr -d ' ')
+    fi
+  fi
+
+  # Compare casks
+  if [ -f brewlist-cask.txt ]; then
+    missing_cask=$(comm -23 <(sort brewlist-cask.txt) <(brew list --cask -1 | sort))
+    if [ -n "$missing_cask" ]; then
+      count_cask=$(echo "$missing_cask" | wc -l | tr -d ' ')
+    fi
+  fi
+
+  # Compare MAS apps
+  if [ -f maslist.txt ] && command -v mas &>/dev/null; then
+    missing_mas=$(comm -23 <(awk '{print $1}' maslist.txt | sort) <(mas list | awk '{print $1}' | sort))
+    if [ -n "$missing_mas" ]; then
+      count_mas=$(echo "$missing_mas" | wc -l | tr -d ' ')
+    fi
+  fi
+
+  local total=$((count_formula + count_cask + count_mas))
+
+  if [ "$total" -eq 0 ]; then
+    echo ""
+    print_success "All packages from repo are installed locally"
+    echo ""
+    read -r -p "Press Enter to continue..." && clear_up 1
+    return 0
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Missing packages:${NC}"
+  echo ""
+
+  if [ -n "$missing_formula" ]; then
+    echo -e "  ${GREEN}Formulae (${count_formula}):${NC}"
+    echo "$missing_formula" | while read -r pkg; do
+      echo -e "    ${pkg}"
+    done
+    echo ""
+  fi
+
+  if [ -n "$missing_cask" ]; then
+    echo -e "  ${GREEN}Casks (${count_cask}):${NC}"
+    echo "$missing_cask" | while read -r pkg; do
+      echo -e "    ${pkg}"
+    done
+    echo ""
+  fi
+
+  if [ -n "$missing_mas" ]; then
+    echo -e "  ${GREEN}MAS apps (${count_mas}):${NC}"
+    echo "$missing_mas" | while read -r app_id; do
+      # Show app name from repo file if available
+      local name
+      name=$(grep "^${app_id} " maslist.txt | sed "s/^${app_id} //" || echo "$app_id")
+      echo -e "    ${app_id} ${name}"
+    done
+    echo ""
+  fi
+
+  echo -e "  ${BOLD}Total: ${total} package(s) to install${NC}"
+  echo ""
+
+  read -r -p "$(echo -e "${BRIGHT_PINK}Install missing packages? [y/N]:${NC} ")" response
+  case "$response" in
+    [yY][eE][sS]|[yY]) ;;
+    *)
+      print_warning "Cancelled"
+      echo ""
+      read -r -p "Press Enter to continue..." && clear_up 1
+      return 0
+      ;;
+  esac
+
+  echo ""
+
+  if [ -n "$missing_formula" ]; then
+    echo -e "  Installing formulae..."
+    echo "$missing_formula" | xargs brew install || print_error "Some formulae failed to install"
+  fi
+
+  if [ -n "$missing_cask" ]; then
+    echo -e "  Installing casks..."
+    echo "$missing_cask" | xargs brew install --cask || print_error "Some casks failed to install"
+  fi
+
+  if [ -n "$missing_mas" ]; then
+    echo -e "  Installing MAS apps..."
+    echo "$missing_mas" | xargs mas install || print_error "Some MAS apps failed to install"
+  fi
+
+  echo ""
+  print_success "Restore complete"
+  echo ""
+  read -r -p "Press Enter to continue..." && clear_up 1
+)
+
+# ─── Run now ──────────────────────────────────────────────────────────────────
+do_run_now() {
+  print_header "Running sync now"
+  do_sync
+  echo ""
+  read -r -p "Press Enter to continue..." && clear_up 1
+}
+
+# ─── Show current status ─────────────────────────────────────────────────────
+show_status() {
+  print_header "Current Status"
+
+  if agent_loaded; then
+    local sched
+    sched=$(get_schedule_description)
+    print_success "LaunchAgent is loaded"
+    echo -e "  Schedule : ${BOLD}${sched}${NC}"
+  else
+    print_warning "LaunchAgent is not loaded"
+  fi
+
+  echo -e "  Path     : ${BOLD}${REPO_DIR}${NC}"
+  echo -e "  Repo     : ${BOLD}$(short_repo)${NC}"
+
+  # Show file counts
+  if [ -d "$REPO_DIR" ]; then
+    local formula_count=0 cask_count=0 mas_count=0
+    [ -f "$REPO_DIR/brewlist-formula.txt" ] && formula_count=$(wc -l < "$REPO_DIR/brewlist-formula.txt" | tr -d ' ')
+    [ -f "$REPO_DIR/brewlist-cask.txt" ] && cask_count=$(wc -l < "$REPO_DIR/brewlist-cask.txt" | tr -d ' ')
+    [ -f "$REPO_DIR/maslist.txt" ] && mas_count=$(wc -l < "$REPO_DIR/maslist.txt" | tr -d ' ')
+    echo -e "  Formulae : ${BOLD}${formula_count}${NC}"
+    echo -e "  Casks    : ${BOLD}${cask_count}${NC}"
+    echo -e "  MAS apps : ${BOLD}${mas_count}${NC}"
+  fi
+
+  echo ""
+  read -r -p "Press Enter to continue..." && clear_up 1
+}
+
+# ─── Disable ──────────────────────────────────────────────────────────────────
+do_disable() {
+  # Unload LaunchAgent if active
+  if agent_loaded || [ -f "$PLIST_FILE" ]; then
+    unload_agent
+  else
+    print_warning "LaunchAgent is not active"
+  fi
+
+  # Handle the package list directory
+  if [ -d "$REPO_DIR" ]; then
+    echo ""
+    echo -e "  ${PINK}>${NC} ${GREEN}1)${NC} Delete directory and files (${REPO_DIR})"
+    echo -e "  ${PINK}>${NC} ${GREEN}2)${NC} Keep directory"
+    echo -e "  ${PINK}>${NC} ${GREEN}3)${NC} Cancel"
+    echo ""
+    read -r -p "$(echo -e "${BRIGHT_PINK}Choose [1-3]:${NC} ")" dir_choice
+    clear_up 6
+
+    case "$dir_choice" in
+      1)
+        rm -rf "$REPO_DIR"
+        print_success "Deleted ${REPO_DIR}"
+        REPO_DIR=""
+        REMOTE_URL=""
+        save_config
+        ;;
+      2)
+        print_warning "Directory kept at ${REPO_DIR}"
+        ;;
+      *)
+        print_warning "Cancelled"
+        ;;
+    esac
+  else
+    echo ""
+    echo -e "  ${YELLOW}Directory ${REPO_DIR} does not exist.${NC}"
+    echo ""
+    echo -e "  ${PINK}>${NC} ${GREEN}1)${NC} Update config (directory was moved/removed)"
+    echo -e "  ${PINK}>${NC} ${GREEN}2)${NC} Cancel"
+    echo ""
+    read -r -p "$(echo -e "${BRIGHT_PINK}Choose [1-2]:${NC} ")" dir_choice
+    clear_up 6
+
+    case "$dir_choice" in
+      1)
+        REPO_DIR=""
+        REMOTE_URL=""
+        save_config
+        print_success "Config cleared — re-run brewsync to set up again"
+        ;;
+      *)
+        print_warning "Cancelled"
+        ;;
+    esac
+  fi
+
+  echo ""
+  read -r -p "Press Enter to continue..." && clear_up 1
+}
+
+# ─── Main menu ────────────────────────────────────────────────────────────────
+show_menu() {
+  clear
+  print_banner
+
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
+  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Homebrew Package List Auto-Sync *${NC}                   ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+
+  # Schedule status
+  if agent_loaded; then
+    local sched
+    sched=$(get_schedule_description)
+    box_line "Schedule: ${sched}" "$GREEN"
+  else
+    box_line "Schedule: inactive" "$RED"
+  fi
+
+  # Save path
+  if [ -n "$REPO_DIR" ]; then
+    box_line "Path:  ${REPO_DIR}" "$YELLOW"
+  else
+    box_line "Path:  (not configured)" "$RED"
+  fi
+
+  # GitHub repo
+  if [ -n "$REMOTE_URL" ]; then
+    box_line "Repo:  $(short_repo)" "$YELLOW"
+  else
+    box_line "Repo:  (not configured)" "$RED"
+  fi
+
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Set schedule: Hourly                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} Set schedule: Daily                             ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Set schedule: Weekly                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}a)${NC} Change save path                                ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}b)${NC} Change GitHub repo                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}c)${NC} Restore from repo                               ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Run sync now                                    ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} Show status                                     ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} Disable / Remove                                ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+  echo ""
+}
+
+main() {
+  load_config
+  ensure_config
+
+  # Silent mode for launchd
+  if [ "${1:-}" == "--run" ]; then
+    do_sync
+    exit $?
+  fi
+
+  while true; do
+    show_menu
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-7, a-c]:${NC} ")" choice
+    clear_up 1
+
+    case $choice in
+      1|2|3|5|6)
+        if [ -z "$REPO_DIR" ] || [ -z "$REMOTE_URL" ]; then
+          ensure_config
+        else
+          case $choice in
+            1) setup_hourly ;;
+            2) setup_daily ;;
+            3) setup_weekly ;;
+            5) do_run_now ;;
+            6) show_status ;;
+          esac
+        fi
+        ;;
+      7) do_disable ;;
+      a|A)
+        if [ -z "$REPO_DIR" ] || [ -z "$REMOTE_URL" ]; then
+          ensure_config
+        else
+          change_path
+        fi
+        ;;
+      b|B) change_repo ;;
+      c|C)
+        if [ -z "$REPO_DIR" ] || [ -z "$REMOTE_URL" ]; then
+          ensure_config
+        else
+          do_restore
+        fi
+        ;;
+      0)
+        echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
+        exit 0
+        ;;
+      *)
+        print_error "Invalid option"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+main "$@"
