@@ -540,6 +540,121 @@ change_repo() {
   read -r -p "Press Enter to continue..."
 }
 
+# ─── Detect AUR helper ────────────────────────────────────────────────────────
+detect_aur_helper() {
+  if command -v paru &>/dev/null; then
+    echo "paru"
+  elif command -v yay &>/dev/null; then
+    echo "yay"
+  else
+    echo ""
+  fi
+}
+
+# ─── Restore from repo ────────────────────────────────────────────────────────
+do_restore() {
+  cd "$REPO_DIR" || { print_error "Cannot cd to $REPO_DIR"; return 1; }
+
+  # Ensure remote is correct and pull latest
+  if ! git remote get-url origin &>/dev/null; then
+    git remote add origin "$REMOTE_URL"
+  else
+    git remote set-url origin "$REMOTE_URL"
+  fi
+
+  echo -e "  Pulling latest from repo..."
+  if ! git fetch origin main; then
+    print_error "Failed to fetch from remote"
+    echo ""
+    read -r -p "Press Enter to continue..."
+    return 1
+  fi
+  git checkout main 2>/dev/null || git checkout -b main origin/main
+  git reset --hard origin/main
+
+  local missing_native="" missing_aur=""
+  local count_native=0 count_aur=0
+
+  # Compare native packages
+  if [ -f pkglist-native.txt ]; then
+    missing_native=$(comm -23 <(sort pkglist-native.txt) <(pacman -Qqen | sort))
+    if [ -n "$missing_native" ]; then
+      count_native=$(echo "$missing_native" | wc -l | tr -d ' ')
+    fi
+  fi
+
+  # Compare AUR packages
+  if [ -f pkglist-aur.txt ]; then
+    missing_aur=$(comm -23 <(sort pkglist-aur.txt) <(pacman -Qqem | sort))
+    if [ -n "$missing_aur" ]; then
+      count_aur=$(echo "$missing_aur" | wc -l | tr -d ' ')
+    fi
+  fi
+
+  local total=$((count_native + count_aur))
+
+  if [ "$total" -eq 0 ]; then
+    echo ""
+    print_success "All packages from repo are installed locally"
+    echo ""
+    read -r -p "Press Enter to continue..."
+    return 0
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Missing packages:${NC}"
+  echo ""
+
+  if [ -n "$missing_native" ]; then
+    echo -e "  ${GREEN}Native (${count_native}):${NC}"
+    echo "$missing_native" | while read -r pkg; do
+      echo -e "    ${pkg}"
+    done
+    echo ""
+  fi
+
+  if [ -n "$missing_aur" ]; then
+    echo -e "  ${GREEN}AUR (${count_aur}):${NC}"
+    echo "$missing_aur" | while read -r pkg; do
+      echo -e "    ${pkg}"
+    done
+    echo ""
+  fi
+
+  echo -e "  ${BOLD}Total: ${total} package(s) to install${NC}"
+  echo ""
+
+  if [ -n "$missing_native" ]; then
+    echo -e "  Installing native packages..."
+    local -a native_pkgs
+    mapfile -t native_pkgs < <(echo "$missing_native" | tr -d '\r')
+    if ! sudo pacman -S --needed "${native_pkgs[@]}"; then
+      print_error "Some native packages failed to install"
+    fi
+  fi
+
+  if [ -n "$missing_aur" ]; then
+    local aur_helper
+    aur_helper=$(detect_aur_helper)
+    if [ -z "$aur_helper" ]; then
+      print_error "No AUR helper found (install yay or paru first)"
+      echo -e "  Skipping AUR packages"
+    else
+      echo -e "  Installing AUR packages via ${BOLD}${aur_helper}${NC}..."
+      local -a aur_pkgs
+      mapfile -t aur_pkgs < <(echo "$missing_aur" | tr -d '\r')
+      if ! "$aur_helper" -S --needed "${aur_pkgs[@]}"; then
+        print_error "Some AUR packages failed to install"
+      fi
+    fi
+  fi
+
+  echo ""
+  print_success "Restore complete"
+  echo ""
+  read -r -p "Press Enter to continue..."
+}
+
 # ─── Run now ──────────────────────────────────────────────────────────────────
 do_run_now() {
   print_header "Running sync now"
@@ -652,6 +767,8 @@ show_menu() {
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}a)${NC} Change save path                                ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}b)${NC} Change GitHub repo                              ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}c)${NC} Restore from repo                               ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Run sync now                                    ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} Show status                                     ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} Disable / Remove                                ${CYAN}${ITALIC}║${NC}"
@@ -674,7 +791,7 @@ main() {
 
   while true; do
     show_menu
-    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-7, a-b]:${NC} ")" choice
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-7, a-c]:${NC} ")" choice
 
     case $choice in
       1) setup_hourly ;;
@@ -693,6 +810,7 @@ main() {
       7) do_disable ;;
       a|A) change_path ;;
       b|B) change_repo ;;
+      c|C) do_restore ;;
       0)
         echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
         exit 0

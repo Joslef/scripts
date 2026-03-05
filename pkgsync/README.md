@@ -12,6 +12,7 @@ A colorful, interactive tool that automatically syncs your Arch Linux package li
 - 🛠️ **Interactive Configuration** — change the save path or GitHub repo at any time without touching config files manually
 - 📊 **Live Status** — shows timer schedule, next scheduled run, boot sync state, save path, and target repo at a glance
 - ⚡ **Headless Mode** — pass `--run` for silent, non-interactive execution (used internally by systemd)
+- 🔁 **Restore from Repo** — pulls your saved package lists from GitHub, compares them against what is currently installed, and installs any missing packages via `pacman` and your AUR helper
 
 ## 🚀 Usage
 
@@ -40,6 +41,7 @@ Both values are persisted to `~/.config/pkgsync/config` and reused on subsequent
 | `4` | Toggle boot sync on/off |
 | `a` | Change save path |
 | `b` | Change GitHub repo URL |
+| `c` | Restore packages from repo |
 | `5` | Run sync now |
 | `6` | Show current status |
 | `7` | Disable / remove timer or boot sync |
@@ -79,7 +81,17 @@ gh auth login
 
 ## 🖥️ Restoring Packages on a New Machine
 
-To recreate your package set on a fresh Arch installation, clone your GitHub package-list repo and replay both lists.
+The easiest way to restore your packages is the built-in restore option. From the interactive menu, press `c`. pkgsync will:
+
+1. Pull the latest `pkglist-native.txt` and `pkglist-aur.txt` from your configured GitHub repo.
+2. Diff them against locally installed packages and show a count of what is missing.
+3. Ask for confirmation before installing anything.
+4. Install missing native packages via `sudo pacman -S --needed --noconfirm`.
+5. Install missing AUR packages via `paru` or `yay` (whichever is detected). If neither is found, AUR packages are skipped with an error message.
+
+Make sure your AUR helper (`paru` or `yay`) is installed before running the restore if you have AUR packages to recover.
+
+**Manual alternative** — if pkgsync is not yet set up on the new machine, clone the repo directly and replay the lists:
 
 ```bash
 # 1. Clone the repo containing your saved package lists
@@ -92,8 +104,6 @@ sudo pacman -S --needed - < pkglist-native.txt
 # 3. Install AUR packages — requires an AUR helper (e.g. yay or paru)
 yay -S --needed - < pkglist-aur.txt
 ```
-
-Install your AUR helper (e.g. `yay`) before running step 3; it is not available via pacman by default.
 
 ## 🖥️ Requirements
 
