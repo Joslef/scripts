@@ -1,0 +1,420 @@
+#!/bin/bash
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+ITALIC='\033[3m'
+NC='\033[0m'
+
+# Fancy FF27DD color (bright magenta/pink) - ANSI 256 color
+PINK='\033[38;5;198m'
+BRIGHT_PINK='\033[38;5;201m'
+HOT_PINK='\033[38;5;205m'
+
+print_header() {
+  echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_error() {
+  echo -e "${RED}✗ $1${NC}"
+}
+
+print_banner() {
+  echo -e "${PINK}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╔══════════════════════════════════════════════╗${NC}${BRIGHT_PINK} *"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}███╗   ███╗ █████╗  ██████╗${NC}                 ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}████╗ ████║██╔══██╗██╔════╝${NC}                 ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔████╔██║███████║██║${NC}                      ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██║╚██╔╝██║██╔══██║██║${NC}                      ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██║ ╚═╝ ██║██║  ██║╚██████╗${NC}                 ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝${NC}                 ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}███████╗██████╗ ███████╗███████╗██╗  ██╗${NC}    ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔════╝██╔══██╗██╔════╝██╔════╝██║  ██║${NC}    ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}█████╗  ██████╔╝█████╗  ███████╗███████║${NC}    ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔══╝  ██╔══██╗██╔══╝  ╚════██║██╔══██║${NC}    ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██║     ██║  ██║███████╗███████║██║  ██║${NC}    ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚═╝     ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝${NC}    ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╚══════════════════════════════════════════════╝${NC}${BRIGHT_PINK} *${NC}"
+  echo ""
+}
+
+confirm() {
+  read -r -p "$1 [Y/n]: " response || true
+  case "${response:-}" in
+  [nN][oO] | [nN])
+    false
+    ;;
+  *)
+    true
+    ;;
+  esac
+}
+
+check_deps() {
+  if ! command -v brew &>/dev/null; then
+    print_error "Homebrew not found. Install from https://brew.sh"
+    exit 1
+  fi
+  if ! command -v mas &>/dev/null; then
+    print_warning "mas not found (install: brew install mas) - App Store updates unavailable"
+  fi
+}
+
+# Guard to avoid running brew update multiple times in one session (e.g. Run All)
+_brew_updated=false
+
+brew_update() {
+  if [[ "$_brew_updated" == false ]]; then
+    brew update
+    _brew_updated=true
+  fi
+}
+
+do_formulae() {
+  print_header "Homebrew Formulae Update"
+  if confirm "Update and upgrade brew formulae?"; then
+    brew_update
+    brew upgrade --formula
+    print_success "Formulae updated"
+  else
+    print_warning "Formulae update skipped"
+  fi
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_casks() {
+  print_header "Homebrew Casks Update"
+  print_warning "Cask upgrades may require passwords and can occasionally break apps"
+  if confirm "Update and upgrade brew casks?"; then
+    brew_update
+    brew upgrade --cask
+    print_success "Casks updated"
+  else
+    print_warning "Cask update skipped"
+  fi
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_mas() {
+  print_header "Mac App Store Update"
+  if ! command -v mas &>/dev/null; then
+    print_error "mas not installed (brew install mas)"
+    read -r -p "Press Enter to continue..." || true
+    return 0
+  fi
+  echo "Checking for App Store updates..."
+  mas outdated || true
+  if confirm "Upgrade all App Store apps?"; then
+    mas upgrade
+    print_success "App Store apps updated"
+  else
+    print_warning "App Store update skipped"
+  fi
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_safe_update() {
+  print_header "Safe Update (Formulae + App Store)"
+  print_warning "Casks excluded (they can break things)"
+  if confirm "Run safe update?"; then
+    brew_update
+    brew upgrade --formula
+    print_success "Formulae updated"
+    if command -v mas &>/dev/null; then
+      mas upgrade
+      print_success "App Store apps updated"
+    fi
+  else
+    print_warning "Safe update skipped"
+  fi
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_full_update() {
+  print_header "Full Update (Formulae + Casks + App Store)"
+  print_warning "This includes cask upgrades which may require passwords"
+  if confirm "Run full update?"; then
+    brew_update
+    brew upgrade --formula
+    print_success "Formulae updated"
+    brew upgrade --cask
+    print_success "Casks updated"
+    if command -v mas &>/dev/null; then
+      mas upgrade
+      print_success "App Store apps updated"
+    fi
+  else
+    print_warning "Full update skipped"
+  fi
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_cleanup() {
+  print_header "Homebrew Cleanup"
+  echo "Current Homebrew cache size: $(du -sh "$(brew --cache)" 2>/dev/null | cut -f1)"
+  echo ""
+  echo "Cleanup options:"
+  echo "  1) Standard cleanup (recommended)"
+  echo "  2) Aggressive cleanup (remove all old versions + cache)"
+  echo "  3) Dry run (preview only)"
+  echo "  4) Skip"
+
+  read -r -p "Select option [1-4]: " choice || true
+
+  case $choice in
+  1)
+    echo ""
+    brew cleanup
+    echo ""
+    print_success "Homebrew cleanup completed"
+    read -r -p "Press Enter to continue..." || true
+    ;;
+  2)
+    if confirm "Remove ALL old versions and purge cache?"; then
+      echo ""
+      brew cleanup --prune=all -s
+      echo ""
+      print_success "Aggressive cleanup completed"
+    else
+      print_warning "Cleanup skipped"
+    fi
+    read -r -p "Press Enter to continue..." || true
+    ;;
+  3)
+    echo ""
+    brew cleanup --dry-run
+    echo ""
+    print_success "Dry run complete - review above to see what would be cleaned"
+    read -r -p "Press Enter to continue..." || true
+    ;;
+  *)
+    print_warning "Cleanup skipped"
+    read -r -p "Press Enter to continue..." || true
+    ;;
+  esac
+}
+
+do_doctor() {
+  print_header "Homebrew Doctor"
+  if confirm "Run brew doctor to check for issues?"; then
+    echo "Checking Homebrew health..."
+    if brew doctor; then
+      print_success "Homebrew is healthy"
+    else
+      print_warning "Issues found (see above)"
+    fi
+  fi
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_system_cleanup() {
+  print_header "System Cleanup"
+
+  echo -e "${RED}${BOLD}WARNING: Clearing user caches while apps are running can crash them${NC}"
+  echo -e "${RED}${BOLD}         and may require a restart! Close all apps first.${NC}"
+  echo ""
+
+  echo "Cleanup targets:"
+
+  user_cache=$(du -sh ~/Library/Caches 2>/dev/null | cut -f1)
+  echo "  ~/Library/Caches: $user_cache"
+
+  log_size=$(du -sh ~/Library/Logs 2>/dev/null | cut -f1)
+  echo "  ~/Library/Logs: $log_size"
+
+  echo ""
+  echo "Cleanup options:"
+  echo "  1) Clear user logs only (~/Library/Logs) - safe"
+  echo "  2) Clear user caches (~/Library/Caches) - risky"
+  echo "  3) Clear all of the above"
+  echo "  4) Skip"
+
+  read -r -p "Select option [1-4]: " choice || true
+
+  case $choice in
+  1)
+    if confirm "Delete ~/Library/Logs contents?"; then
+      rm -rf "${HOME}/Library/Logs/"*
+      print_success "User logs cleared"
+    else
+      print_warning "Cleanup skipped"
+    fi
+    ;;
+  2)
+    echo ""
+    print_error "This WILL crash running apps. Close ALL apps before proceeding."
+    read -r -p "Type YES to confirm: " yn || true
+    if [[ "$yn" == "YES" ]]; then
+      rm -rf "${HOME}/Library/Caches/"*
+      print_success "User caches cleared"
+    else
+      print_warning "Cleanup skipped"
+    fi
+    ;;
+  3)
+    echo ""
+    print_error "This WILL crash running apps. Close ALL apps before proceeding."
+    read -r -p "Type YES to confirm: " yn || true
+    if [[ "$yn" == "YES" ]]; then
+      rm -rf "${HOME}/Library/Caches/"* "${HOME}/Library/Logs/"*
+      print_success "User caches and logs cleared"
+    else
+      print_warning "Cleanup skipped"
+    fi
+    ;;
+  *)
+    print_warning "System cleanup skipped"
+    ;;
+  esac
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_info() {
+  local interactive=${1:-true}
+  print_header "System Info"
+
+  echo "macOS version: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+  echo ""
+
+  echo "Disk usage:"
+  local disk_total disk_free disk_used disk_pct
+  disk_total=$(diskutil info / | awk -F': *' '/Container Total Space/{print $2}' | sed 's/ (.*//')
+  disk_free=$(diskutil info / | awk -F': *' '/Container Free Space/{print $2}' | sed 's/ (.*//')
+  disk_used=$(awk "BEGIN {printf \"%.0f\", ${disk_total%% *} - ${disk_free%% *}}")
+  disk_pct=$(awk "BEGIN {printf \"%.0f\", ($disk_used / ${disk_total%% *}) * 100}")
+  disk_total_int=$(awk "BEGIN {printf \"%.0f\", ${disk_total%% *}}")
+  disk_free_int=$(awk "BEGIN {printf \"%.0f\", ${disk_free%% *}}")
+  printf "  %-12s %s GB\n" "Total:" "$disk_total_int"
+  printf "  %-12s %s GB (%s%%)\n" "Used:" "$disk_used" "$disk_pct"
+  printf "  %-12s %s GB\n" "Free:" "$disk_free_int"
+  echo ""
+
+  echo "Homebrew statistics:"
+  echo "  Formulae installed: $(brew list --formula 2>/dev/null | wc -l | tr -d ' ')"
+  echo "  Casks installed: $(brew list --cask 2>/dev/null | wc -l | tr -d ' ')"
+  echo "  Homebrew cache size: $(du -sh "$(brew --cache)" 2>/dev/null | cut -f1)"
+
+  if command -v mas &>/dev/null; then
+    echo "  App Store apps: $(mas list 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+
+  [[ "$interactive" == true ]] && read -r -p "Press Enter to continue..." || true
+}
+
+do_quick() {
+  print_header "QUICK MODE"
+  print_warning "Running: safe update, cleanup, doctor, info"
+
+  brew_update
+  brew upgrade --formula
+  print_success "Formulae updated"
+
+  if command -v mas &>/dev/null; then
+    mas upgrade 2>/dev/null || true
+    print_success "App Store checked"
+  fi
+
+  brew cleanup --prune=all 2>/dev/null || true
+  print_success "Cleanup done"
+
+  if ! brew doctor &>/dev/null; then
+    print_warning "Homebrew issues detected (run doctor for details)"
+  else
+    print_success "Homebrew healthy"
+  fi
+
+  do_info false
+}
+
+show_menu() {
+  clear
+  print_banner
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔══════════════════════════════════════════════╗${NC}${CYAN} *"
+  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* macOS Maintenance Script *${NC}                 ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠══════════════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Homebrew Formulae Update               ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} Homebrew Casks Update                  ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Mac App Store Update                   ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Safe Update (formulae + mas)           ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Full Update (all)                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} Homebrew Cleanup                       ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} Homebrew Doctor                        ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}8)${NC} System Cleanup                         ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}9)${NC} System Info                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}q)${NC} ${BRIGHT_PINK}QUICK MODE${NC} (safe ops)                  ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}a)${NC} Run All (interactive)                  ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                                   ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚══════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+}
+
+main() {
+  check_deps
+
+  if [ "${1:-}" == "--quick" ]; then
+    do_quick
+    exit 0
+  fi
+
+  while true; do
+    _brew_updated=false
+    show_menu
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-9/q/a]:${NC} ")" choice || true
+
+    case $choice in
+    1) do_formulae ;;
+    2) do_casks ;;
+    3) do_mas ;;
+    4) do_safe_update ;;
+    5) do_full_update ;;
+    6) do_cleanup ;;
+    7) do_doctor ;;
+    8) do_system_cleanup ;;
+    9) do_info ;;
+    q | Q)
+      do_quick
+      read -r -p "Press Enter to continue..." || true
+      ;;
+    a | A)
+      do_formulae
+      do_casks
+      do_mas
+      do_cleanup
+      do_doctor
+      do_system_cleanup
+      do_info
+      ;;
+    0)
+      echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
+      exit 0
+      ;;
+    *)
+      print_error "Invalid option"
+      sleep 1
+      ;;
+    esac
+  done
+}
+
+main "$@"
