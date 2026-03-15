@@ -193,6 +193,9 @@ do_sync() (
     git remote set-url origin "$REMOTE_URL"
   fi
 
+  # Pull latest to avoid push rejections when syncing from multiple machines
+  git pull --rebase origin main 2>/dev/null || true
+
   # Generate package lists
   if ! command -v brew &>/dev/null; then
     echo "ERROR: brew not found"
