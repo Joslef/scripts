@@ -613,7 +613,7 @@ do_restore() (
   fi
 
   echo -e "  Pulling latest from repo..."
-  if ! git pull origin main --ff-only 2>/dev/null; then
+  if ! git pull origin main --rebase 2>/dev/null; then
     print_error "Failed to pull from remote"
     echo ""
     read -r -p "Press Enter to continue..." && clear_up 1
