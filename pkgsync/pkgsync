@@ -185,10 +185,11 @@ do_sync() {
     return 0
   fi
 
-  # Commit with timestamp, push
+  # Commit with timestamp, pull remote changes, then push
   local timestamp
   timestamp=$(date +"%Y-%m-%d_%H-%M")
   git commit -m "$timestamp"
+  git pull --rebase origin main || { echo "ERROR: git pull --rebase failed"; exit 1; }
   git push origin main || { echo "ERROR: git push failed"; exit 1; }
   echo "Pushed changes: $timestamp"
 }
