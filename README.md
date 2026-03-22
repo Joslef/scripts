@@ -7,12 +7,21 @@ A collection of colorful, interactive shell scripts for system maintenance, medi
 | Script | Description | Platform | Highlights |
 |--------|-------------|----------|------------|
 | [archmaint](archmaint/) | Interactive Arch Linux maintenance — system updates, orphan removal, cache cleanup, database checks | Linux | Quick mode (`--quick`), run-all option, system info dashboard |
+| [changemachine](changemachine/) | Switches Hyprland between machine profiles by toggling tagged config lines | Linux | Two-profile toggle (lggram / gcube), auto-detection, tag-based |
 | [audioshell](audioshell/) | Terminal radio player with animated TUI — browse and stream 25 internet radio stations | Both | Live metadata, animated equalizer, pause/resume, disco toggle, 25 curated stations |
 | [brewsync](brewsync/) | Syncs Homebrew and Mac App Store package lists to GitHub — scheduled or on demand | macOS | Launchd timers (hourly/daily/weekly), restore from repo, change detection |
 | [chezclaudesync](chezclaudesync/) | Syncs Claude Code config files into chezmoi for version-controlled backup | Both | Settings, agents, hooks, memory files; secrets-safe (no API keys) |
 | [gitstatus](gitstatus/) | Recursive Git repo health checker — scans directories and flags dirty repos | Both | Remote fetch, dirty-only filter, non-interactive mode (`--scan`), animated spinner |
 | [macfresh](macfresh/) | Interactive macOS maintenance — Homebrew updates, App Store updates, system cleanup | macOS | Quick mode (`--run`), formula/cask/MAS updates, cache cleanup, brew doctor |
 | [pkgsync](pkgsync/) | Syncs Arch Linux package lists to GitHub — scheduled, on boot, or on demand | Linux | Systemd timers, boot sync, restore from repo, AUR helper detection |
+
+---
+
+### 🖥️ changemachine
+
+Switches Hyprland between machine profiles (`lggram` and `gcube`) by toggling comment markers on tagged lines in `~/.config/hypr/hyprland.conf`. Auto-detects the current profile and always switches to the other.
+
+→ [Full documentation](changemachine/README.md) | `changemachine`
 
 ---
 

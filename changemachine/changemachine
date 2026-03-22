@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+
+# Switch hyprland.conf between lggram and gcube profiles.
+# Lines tagged "# lggram" or "# gcube" are toggled active/commented.
+
+import re
+
+conf = __import__('os').path.expanduser("~/.config/hypr/hyprland.conf")
+
+with open(conf) as f:
+    lines = f.readlines()
+
+# Detect current state
+if any(re.search(r'# lggram$', l) and not l.startswith('#') for l in lines):
+    current, target = "lggram", "gcube"
+else:
+    current, target = "gcube", "lggram"
+
+out = []
+for line in lines:
+    if re.search(r'# ' + target + r'$', line) and line.startswith('# '):
+        line = line[2:]
+    elif re.search(r'# ' + current + r'$', line) and not line.startswith('#'):
+        line = '# ' + line
+    out.append(line)
+
+with open(conf, 'w') as f:
+    f.writelines(out)
+
+print(f"{target} is active")
+print()
+input("Press Return to close...")
