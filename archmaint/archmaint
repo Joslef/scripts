@@ -78,6 +78,7 @@ do_update() {
   if confirm "Update package database and upgrade system?"; then
     sudo pacman -Syu --needed
     print_success "System updated"
+    read -r -p "Press Enter to continue..." || true
   else
     print_warning "Update skipped"
   fi
