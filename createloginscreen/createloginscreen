@@ -1,0 +1,130 @@
+#!/bin/bash
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+PINK='\033[38;5;198m'
+BRIGHT_PINK='\033[38;5;201m'
+
+print_header() {
+  echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_error() {
+  echo -e "${RED}✗ $1${NC}"
+}
+
+print_banner() {
+  echo -e "${PINK}"
+  echo -e "  ${BRIGHT_PINK}╔══════════════════════════════════════════╗"
+  echo -e "  ║                                          ║"
+  echo -e "  ║       SDDM Login Screen Setup            ║"
+  echo -e "  ║       catppuccin-mocha-pink              ║"
+  echo -e "  ║                                          ║"
+  echo -e "  ╚══════════════════════════════════════════╝${NC}"
+  echo ""
+}
+
+# ── config ────────────────────────────────────────────────────────────────────
+THEME_NAME="catppuccin-mocha-pink"
+THEME_PKG="catppuccin-sddm-theme-mocha"
+AUTOLOGIN_USER="joerg"
+AUTOLOGIN_SESSION="hyprland"
+# ─────────────────────────────────────────────────────────────────────────────
+
+print_banner
+
+# Require root
+if [[ $EUID -ne 0 ]]; then
+  print_error "This script must be run as root (use sudo)"
+  exit 1
+fi
+
+# ── 1. Install theme package ──────────────────────────────────────────────────
+print_header "Installing SDDM theme package"
+
+if pacman -Qi "$THEME_PKG" &>/dev/null; then
+  print_success "$THEME_PKG is already installed"
+else
+  echo "Installing $THEME_PKG via paru (running as $AUTOLOGIN_USER)..."
+  sudo -u "$AUTOLOGIN_USER" paru -S --noconfirm "$THEME_PKG"
+  print_success "$THEME_PKG installed"
+fi
+
+# ── 2. Verify theme files exist ───────────────────────────────────────────────
+THEME_DIR="/usr/share/sddm/themes/${THEME_NAME}"
+if [[ ! -d "$THEME_DIR" ]]; then
+  print_error "Theme directory not found: $THEME_DIR"
+  exit 1
+fi
+print_success "Theme directory exists: $THEME_DIR"
+
+# ── 3. Write /etc/sddm.conf ───────────────────────────────────────────────────
+print_header "Writing SDDM configuration"
+
+cat > /etc/sddm.conf << EOF
+[Autologin]
+Session=${AUTOLOGIN_SESSION}
+EOF
+print_success "Written /etc/sddm.conf"
+
+# ── 4. Write /etc/sddm.conf.d/theme.conf ─────────────────────────────────────
+mkdir -p /etc/sddm.conf.d
+
+cat > /etc/sddm.conf.d/theme.conf << EOF
+[Theme]
+Current=${THEME_NAME}
+EOF
+print_success "Written /etc/sddm.conf.d/theme.conf"
+
+# ── 5. Write /etc/sddm.conf.d/autologin.conf ─────────────────────────────────
+cat > /etc/sddm.conf.d/autologin.conf << EOF
+[Autologin]
+User=${AUTOLOGIN_USER}
+Session=${AUTOLOGIN_SESSION}
+EOF
+print_success "Written /etc/sddm.conf.d/autologin.conf"
+
+# ── 6. Write theme.conf ───────────────────────────────────────────────────────
+cat > "${THEME_DIR}/theme.conf" << EOF
+[General]
+Font="Noto Sans"
+FontSize=25
+ClockEnabled="true"
+CustomBackground="true"
+LoginBackground="false"
+Background="backgrounds/wall.png"
+UserIcon="false"
+EOF
+print_success "Written ${THEME_DIR}/theme.conf"
+
+# ── 7. Enable SDDM service ────────────────────────────────────────────────────
+print_header "Enabling SDDM service"
+
+if systemctl is-enabled sddm &>/dev/null; then
+  print_success "SDDM service already enabled"
+else
+  systemctl enable sddm
+  print_success "SDDM service enabled"
+fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${GREEN}Login screen setup complete.${NC}"
+echo -e "Theme:    ${PINK}${THEME_NAME}${NC}"
+echo -e "User:     ${AUTOLOGIN_USER}"
+echo -e "Session:  ${AUTOLOGIN_SESSION}"
+echo ""
+print_warning "Reboot or restart SDDM to apply: sudo systemctl restart sddm"
