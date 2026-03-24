@@ -40,8 +40,7 @@ print_banner() {
 # ── config ────────────────────────────────────────────────────────────────────
 THEME_NAME="catppuccin-mocha-pink"
 THEME_PKG="catppuccin-sddm-theme-mocha"
-AUTOLOGIN_USER="joerg"
-AUTOLOGIN_SESSION="hyprland"
+INSTALL_USER="joerg"
 # ─────────────────────────────────────────────────────────────────────────────
 
 print_banner
@@ -58,8 +57,8 @@ print_header "Installing SDDM theme package"
 if pacman -Qi "$THEME_PKG" &>/dev/null; then
   print_success "$THEME_PKG is already installed"
 else
-  echo "Installing $THEME_PKG via paru (running as $AUTOLOGIN_USER)..."
-  sudo -u "$AUTOLOGIN_USER" paru -S --noconfirm "$THEME_PKG"
+  echo "Installing $THEME_PKG via paru (running as $INSTALL_USER)..."
+  sudo -u "$INSTALL_USER" paru -S --noconfirm "$THEME_PKG"
   print_success "$THEME_PKG installed"
 fi
 
@@ -71,31 +70,30 @@ if [[ ! -d "$THEME_DIR" ]]; then
 fi
 print_success "Theme directory exists: $THEME_DIR"
 
-# ── 3. Write /etc/sddm.conf ───────────────────────────────────────────────────
+# ── 3. Write /etc/sddm.conf (no autologin) ───────────────────────────────────
 print_header "Writing SDDM configuration"
 
-cat > /etc/sddm.conf << EOF
-[Autologin]
-Session=${AUTOLOGIN_SESSION}
+cat > /etc/sddm.conf << 'EOF'
+[General]
 EOF
-print_success "Written /etc/sddm.conf"
+print_success "Written /etc/sddm.conf (no autologin)"
 
-# ── 4. Write /etc/sddm.conf.d/theme.conf ─────────────────────────────────────
+# ── 4. Remove autologin drop-in if present ────────────────────────────────────
 mkdir -p /etc/sddm.conf.d
 
+if [[ -f /etc/sddm.conf.d/autologin.conf ]]; then
+  rm /etc/sddm.conf.d/autologin.conf
+  print_success "Removed /etc/sddm.conf.d/autologin.conf"
+else
+  print_success "No autologin.conf present"
+fi
+
+# ── 5. Write /etc/sddm.conf.d/theme.conf ─────────────────────────────────────
 cat > /etc/sddm.conf.d/theme.conf << EOF
 [Theme]
 Current=${THEME_NAME}
 EOF
 print_success "Written /etc/sddm.conf.d/theme.conf"
-
-# ── 5. Write /etc/sddm.conf.d/autologin.conf ─────────────────────────────────
-cat > /etc/sddm.conf.d/autologin.conf << EOF
-[Autologin]
-User=${AUTOLOGIN_USER}
-Session=${AUTOLOGIN_SESSION}
-EOF
-print_success "Written /etc/sddm.conf.d/autologin.conf"
 
 # ── 6. Write theme.conf ───────────────────────────────────────────────────────
 cat > "${THEME_DIR}/theme.conf" << EOF
@@ -124,7 +122,6 @@ fi
 echo ""
 echo -e "${GREEN}Login screen setup complete.${NC}"
 echo -e "Theme:    ${PINK}${THEME_NAME}${NC}"
-echo -e "User:     ${AUTOLOGIN_USER}"
-echo -e "Session:  ${AUTOLOGIN_SESSION}"
+echo -e "Autologin: disabled — password required at boot"
 echo ""
 print_warning "Reboot or restart SDDM to apply: sudo systemctl restart sddm"
