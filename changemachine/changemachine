@@ -11,17 +11,19 @@ with open(conf) as f:
     lines = f.readlines()
 
 # Detect current state
-if any(re.search(r'# lggram$', l) and not l.startswith('#') for l in lines):
+if any(re.search(r'# lggram$', l) and not l.lstrip().startswith('#') for l in lines):
     current, target = "lggram", "gcube"
 else:
     current, target = "gcube", "lggram"
 
 out = []
 for line in lines:
-    if re.search(r'# ' + target + r'$', line) and line.startswith('# '):
-        line = line[2:]
-    elif re.search(r'# ' + current + r'$', line) and not line.startswith('#'):
-        line = '# ' + line
+    if re.search(r'# ' + target + r'$', line) and line.lstrip().startswith('# '):
+        line = line.replace('# ', '', 1)
+    elif re.search(r'# ' + current + r'$', line) and not line.lstrip().startswith('#'):
+        stripped = line.lstrip()
+        indent = line[:len(line) - len(stripped)]
+        line = indent + '# ' + stripped
     out.append(line)
 
 with open(conf, 'w') as f:
