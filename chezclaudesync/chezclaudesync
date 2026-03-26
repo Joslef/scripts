@@ -42,8 +42,16 @@ for d in $fixed_dirs
     end
 end
 
-# Sync per-project MEMORY.md files
-for memfile in $claude_dir/projects/*/memory/MEMORY.md
+# Sync global memory files
+for f in $claude_dir/memory/*.md
+    if test -f "$f"
+        chezmoi add "$f" 2>/dev/null
+        and set added (math $added + 1)
+    end
+end
+
+# Sync per-project memory files (all .md, not just MEMORY.md)
+for memfile in $claude_dir/projects/*/memory/*.md
     if test -f "$memfile"
         chezmoi add "$memfile" 2>/dev/null
         and set added (math $added + 1)
