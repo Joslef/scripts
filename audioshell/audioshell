@@ -242,7 +242,7 @@ draw_screen() {
   printf "\033[2K\n"
   local disco_indicator
   [ "$DISCO" -eq 1 ] && disco_indicator="${BRIGHT_PINK}on${NC}" || disco_indicator="${YELLOW}off${NC}"
-  printf "\033[2K  ${YELLOW}j/↓${NC} down  ${YELLOW}k/↑${NC} up  ${YELLOW}Space${NC} play  ${YELLOW}p${NC} pause  ${YELLOW}d${NC} disco[%b]  ${YELLOW}q${NC} quit\n" "$disco_indicator"
+  printf "\033[2K  ${YELLOW}j/↓${NC} down  ${YELLOW}k/↑${NC} up  ${YELLOW}Space${NC} play  ${YELLOW}s${NC} stop  ${YELLOW}d${NC} disco[%b]  ${YELLOW}q${NC} quit\n" "$disco_indicator"
   printf "\033[2K\n"
 
   # ── Station list (scrolling window) ──
@@ -303,7 +303,7 @@ draw_screen() {
 
     printf "\033[2K  %b %b %b  %b %b %b  %b %b %b\n" "$nl" "$eq" "$nr" "$ne1" "$eq" "$ne2" "$nl" "$eq" "$nr"
     printf "\033[2K\n"
-    local play_icon; [ "$PAUSED" -eq 1 ] && play_icon="⏸" || play_icon="▶"
+    local play_icon="▶"
     printf "\033[2K  ${c1}%s${NC}  ${c1}${BOLD}%s${NC}\n" "$play_icon" "$PLAYING_STATION"
     printf "\033[2K     %b\n" "$now_playing"
     printf "\033[2K\n"
@@ -391,15 +391,16 @@ main() {
         start_station "${STATION_NAMES[$SELECTED]}"
         need_redraw=1
         ;;
-      'p'|'P')         # pause / resume
+      's'|'S')         # stop stream
         if [ -n "$MPV_PID" ] && kill -0 "$MPV_PID" 2>/dev/null; then
-          if [ "$PAUSED" -eq 0 ]; then
-            kill -STOP "$MPV_PID" 2>/dev/null && PAUSED=1
-          else
-            kill -CONT "$MPV_PID" 2>/dev/null && PAUSED=0
-          fi
-          need_redraw=1
+          kill "$MPV_PID" 2>/dev/null
+          wait "$MPV_PID" 2>/dev/null
         fi
+        MPV_PID=""
+        PLAYING_STATION=""
+        PLAY_TITLE=""
+        PLAY_ARTIST=""
+        need_redraw=1
         ;;
       'd'|'D')         # toggle disco (animation on/off)
         [ "$DISCO" -eq 1 ] && DISCO=0 || DISCO=1
