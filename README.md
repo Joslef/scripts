@@ -15,6 +15,7 @@ A collection of colorful, interactive shell scripts for system maintenance, medi
 | [gitstatus](gitstatus/) | Recursive Git repo health checker — scans directories and flags dirty repos | Both | Remote fetch, dirty-only filter, non-interactive mode (`--scan`), animated spinner |
 | [macfresh](macfresh/) | Interactive macOS maintenance — Homebrew updates, App Store updates, system cleanup | macOS | Quick mode (`--run`), formula/cask/MAS updates, cache cleanup, brew doctor |
 | [pkgsync](pkgsync/) | Syncs Arch Linux package lists to GitHub — scheduled, on boot, or on demand | Linux | Systemd timers, boot sync, restore from repo, AUR helper detection |
+| [switchreso](switchreso/) | Switches monitor resolutions via an interactive TUI — per-display or both at once | Linux | 4K / 2K / 1080p / Steamdeck presets, atomic hyprctl batch, waybar restart |
 
 ---
 
@@ -87,6 +88,14 @@ Interactive macOS maintenance — Homebrew formula and cask updates, Mac App Sto
 Syncs Arch Linux package lists to a GitHub repository via systemd timers, on boot, or on demand. Detects AUR helpers automatically and restores packages on a new machine.
 
 → [Full documentation](pkgsync/README.md) | `pkgsync` or `pkgsync --run`
+
+---
+
+### 🖥️ switchreso
+
+Interactive TUI for switching monitor resolutions on a dual-display Hyprland setup. Choose a preset, pick which display to change, and both monitors stay perfectly aligned via atomic `hyprctl --batch` commands.
+
+→ [Full documentation](switchreso/README.md) | `switchreso`
 
 ---
 

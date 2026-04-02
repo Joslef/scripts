@@ -1,0 +1,223 @@
+#!/bin/bash
+
+set -uo pipefail
+
+# ─── Colors ───────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+ITALIC='\033[3m'
+NC='\033[0m'
+
+PINK='\033[38;5;198m'
+BRIGHT_PINK='\033[38;5;201m'
+HOT_PINK='\033[38;5;205m'
+
+# ─── Helper functions ─────────────────────────────────────────────────────────
+print_header() { echo -e "\n${BLUE}=== $1 ===${NC}"; }
+print_success() { echo -e "${GREEN}✓ $1${NC}"; }
+print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
+print_error() { echo -e "${RED}✗ $1${NC}"; }
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+print_banner() {
+  echo -e "${PINK}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╔══════════════════════════════════════════════════════════════╗${NC}${BRIGHT_PINK} *"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}███████╗██╗    ██╗██╗████████╗ ██████╗██╗  ██╗${NC}              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}██╔════╝██║    ██║██║╚══██╔══╝██╔════╝██║  ██║${NC}              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}███████╗██║ █╗ ██║██║   ██║   ██║     ███████║${NC}              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚════██║██║███╗██║██║   ██║   ██║     ██╔══██║${NC}              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}███████║╚███╔███╔╝██║   ██║   ╚██████╗██║  ██║${NC}              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${BRIGHT_PINK}╚══════╝ ╚══╝╚══╝ ╚═╝   ╚═╝    ╚═════╝╚═╝  ╚═╝${NC}              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██████╗ ███████╗███████╗ ██████╗${NC}                            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔══██╗██╔════╝██╔════╝██╔═══██╗${NC}                           ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██████╔╝█████╗  ███████╗██║   ██║${NC}                           ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██╔══██╗██╔══╝  ╚════██║██║   ██║${NC}                           ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}██║  ██║███████╗███████║╚██████╔╝${NC}                           ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}  ${HOT_PINK}╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝${NC}                            ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "    ${BRIGHT_PINK}${ITALIC}║${NC}                                                              ${BRIGHT_PINK}${ITALIC}║${NC}"
+  echo -e "  ${BRIGHT_PINK}* ${ITALIC}╚══════════════════════════════════════════════════════════════╝${NC}${BRIGHT_PINK} *${NC}"
+  echo ""
+}
+
+# ─── Get current left monitor width ──────────────────────────────────────────
+get_left_width() {
+  hyprctl monitors -j | python3 -c "
+import sys, json
+monitors = json.load(sys.stdin)
+m = next(m for m in monitors if m['name'] == 'DP-1')
+print(int(m['width'] / m['scale']))
+"
+}
+
+get_right_res() {
+  hyprctl monitors -j | python3 -c "
+import sys, json
+monitors = json.load(sys.stdin)
+m = next(m for m in monitors if m['name'] == 'HDMI-A-1')
+rate = m['refreshRate']
+# Round to nearest integer if within 0.1, else 2 decimal places
+rate = round(rate) if abs(rate - round(rate)) < 0.1 else round(rate, 2)
+print(f\"{m['width']}x{m['height']}@{rate}\")
+"
+}
+
+# ─── Restart waybar so it reflows to new monitor dimensions ──────────────────
+restart_waybar() {
+  pkill waybar 2>/dev/null || true
+  sleep 0.5
+  waybar &>/dev/null &
+  disown
+}
+
+# ─── Apply resolution to a single monitor ────────────────────────────────────
+apply_monitor() {
+  local name="$1"
+  local res="$2"
+  local rate="$3"
+  local posx="$4"
+  local posy="$5"
+  hyprctl keyword monitor "${name},${res}@${rate},${posx}x${posy},1"
+}
+
+# ─── Display picker sub-menu ─────────────────────────────────────────────────
+SELECTED_DISPLAY=""
+
+show_display_menu() {
+  local res_name="$1"
+  while true; do
+    clear
+    print_banner
+    echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔══════════════════════════════════════╗${NC}${CYAN} *"
+    echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Apply ${res_name} to... *${NC}              ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}╠══════════════════════════════════════╣${NC}"
+    echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Display Left (DP-1)            ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} Display Right (HDMI-A-1)       ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Both                           ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Back                           ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
+    echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚══════════════════════════════════════╝${NC}${CYAN} *${NC}"
+    echo ""
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-3]:${NC} ")" display_choice || true
+    case $display_choice in
+      1) SELECTED_DISPLAY="left";  return ;;
+      2) SELECTED_DISPLAY="right"; return ;;
+      3) SELECTED_DISPLAY="both";  return ;;
+      0) SELECTED_DISPLAY="back";  return ;;
+      *) print_error "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
+
+# ─── Resolution logic ─────────────────────────────────────────────────────────
+do_resolution() {
+  local res_name="$1"
+  local res="$2"
+  local base_rate="$3"
+
+  show_display_menu "$res_name"
+
+  case $SELECTED_DISPLAY in
+    back) return ;;
+
+    left)
+      # DP-1 rate adjustments
+      local rate="$base_rate"
+      if [ "$res_name" = "Steamdeck" ]; then rate="59.81"
+      elif [ "$res_name" = "2K" ];       then rate="59.95"
+      fi
+      local new_left_width right_res
+      new_left_width="${res%%x*}"
+      right_res=$(get_right_res)
+      hyprctl --batch "keyword monitor DP-1,${res}@${rate},0x0,1 ; keyword monitor HDMI-A-1,${right_res},${new_left_width}x0,1"
+      restart_waybar
+      print_success "Applied ${res_name} to Display Left (DP-1)"
+      sleep 1
+      ;;
+
+    right)
+      # HDMI-A-1 rate adjustments
+      local rate="$base_rate"
+      if [ "$res_name" = "Steamdeck" ]; then rate="59.91"
+      elif [ "$res_name" = "2K" ];       then rate="59.95"
+      fi
+      local left_width
+      left_width=$(get_left_width)
+      apply_monitor "HDMI-A-1" "$res" "$rate" "$left_width" "0"
+      restart_waybar
+      print_success "Applied ${res_name} to Display Right (HDMI-A-1)"
+      sleep 1
+      ;;
+
+    both)
+      local left_rate="$base_rate"
+      if [ "$res_name" = "Steamdeck" ]; then left_rate="59.81"
+      elif [ "$res_name" = "2K" ];       then left_rate="59.95"
+      fi
+      local right_rate="$base_rate"
+      if [ "$res_name" = "Steamdeck" ]; then right_rate="59.91"
+      elif [ "$res_name" = "2K" ];       then right_rate="59.95"
+      fi
+      local new_left_width="${res%%x*}"
+      hyprctl --batch "keyword monitor DP-1,${res}@${left_rate},0x0,1 ; keyword monitor HDMI-A-1,${res}@${right_rate},${new_left_width}x0,1"
+      restart_waybar
+      print_success "Applied ${res_name} to both displays"
+      sleep 1
+      ;;
+  esac
+}
+
+# ─── Reset ────────────────────────────────────────────────────────────────────
+do_reset() {
+  hyprctl --batch "keyword monitor DP-1,3840x2160@60,0x0,1 ; keyword monitor HDMI-A-1,3840x2160@60,3840x0,1"
+  restart_waybar
+  print_success "Reset both displays to 4K (3840x2160@60)"
+  sleep 1
+}
+
+# ─── Main menu ────────────────────────────────────────────────────────────────
+show_menu() {
+  clear
+  print_banner
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔══════════════════════════════════════╗${NC}${CYAN} *"
+  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Resolution Switcher *${NC}              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}╠══════════════════════════════════════╣${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} 4K                             ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} 2K                             ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} 1080p                          ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Steamdeck                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Reset                          ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                           ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚══════════════════════════════════════╝${NC}${CYAN} *${NC}"
+  echo ""
+}
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
+main() {
+  while true; do
+    show_menu
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-5]:${NC} ")" choice || true
+    case $choice in
+      1) do_resolution "4K"        "3840x2160" "60" ;;
+      2) do_resolution "2K"        "2560x1440" "60" ;;
+      3) do_resolution "1080p"     "1920x1080" "60" ;;
+      4) do_resolution "Steamdeck" "1280x800"  "60" ;;
+      5) do_reset ;;
+      0) echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"; exit 0 ;;
+      *) print_error "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
+
+main "$@"
