@@ -194,8 +194,9 @@ show_menu() {
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} 2K                             ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} 1080p                          ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Steamdeck                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} LG Gram                        ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Reset                          ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} Reset                          ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                           ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}                                      ${CYAN}${ITALIC}║${NC}"
@@ -207,13 +208,14 @@ show_menu() {
 main() {
   while true; do
     show_menu
-    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-5]:${NC} ")" choice || true
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-6]:${NC} ")" choice || true
     case $choice in
       1) do_resolution "4K"        "3840x2160" "60" ;;
       2) do_resolution "2K"        "2560x1440" "60" ;;
       3) do_resolution "1080p"     "1920x1080" "60" ;;
       4) do_resolution "Steamdeck" "1280x800"  "60" ;;
-      5) do_reset ;;
+      5) do_resolution "lggram"    "2560x1600" "60" ;;
+      6) do_reset ;;
       0) echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"; exit 0 ;;
       *) print_error "Invalid option"; sleep 1 ;;
     esac
