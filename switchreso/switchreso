@@ -75,6 +75,27 @@ restart_waybar() {
   disown
 }
 
+# ─── Restart ES-DE if running so it reinitializes at the new resolution ───────
+# ES-DE uses DisplayIndex=1 (DP-1). We pass --resolution explicitly so it
+# doesn't race against Hyprland applying the new mode.
+restart_esde() {
+  if pgrep -x es-de &>/dev/null; then
+    pkill -x es-de 2>/dev/null || true
+    sleep 1.5  # wait for Hyprland to fully apply the new mode
+    local res
+    res=$(hyprctl monitors -j | python3 -c "
+import sys, json
+monitors = json.load(sys.stdin)
+monitors.sort(key=lambda m: m['x'])
+m = monitors[1]  # DisplayIndex=2 = HDMI-A-1 (right monitor)
+print(f\"{m['width']}x{m['height']}\")
+")
+    es-de --resolution "$res" &>/dev/null &
+    disown
+    print_success "ES-DE restarted at ${res}"
+  fi
+}
+
 # ─── Apply resolution to a single monitor ────────────────────────────────────
 apply_monitor() {
   local name="$1"
@@ -138,6 +159,7 @@ do_resolution() {
       right_res=$(get_right_res)
       hyprctl --batch "keyword monitor DP-1,${res}@${rate},0x0,1 ; keyword monitor HDMI-A-1,${right_res},${new_left_width}x0,1"
       restart_waybar
+      restart_esde
       print_success "Applied ${res_name} to Display Left (DP-1)"
       sleep 1
       ;;
@@ -152,6 +174,7 @@ do_resolution() {
       left_width=$(get_left_width)
       apply_monitor "HDMI-A-1" "$res" "$rate" "$left_width" "0"
       restart_waybar
+      restart_esde
       print_success "Applied ${res_name} to Display Right (HDMI-A-1)"
       sleep 1
       ;;
@@ -168,6 +191,7 @@ do_resolution() {
       local new_left_width="${res%%x*}"
       hyprctl --batch "keyword monitor DP-1,${res}@${left_rate},0x0,1 ; keyword monitor HDMI-A-1,${res}@${right_rate},${new_left_width}x0,1"
       restart_waybar
+      restart_esde
       print_success "Applied ${res_name} to both displays"
       sleep 1
       ;;
@@ -178,6 +202,7 @@ do_resolution() {
 do_reset() {
   hyprctl --batch "keyword monitor DP-1,3840x2160@60,0x0,1 ; keyword monitor HDMI-A-1,3840x2160@60,3840x0,1"
   restart_waybar
+  restart_esde
   print_success "Reset both displays to 4K (3840x2160@60)"
   sleep 1
 }
