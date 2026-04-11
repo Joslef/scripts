@@ -84,6 +84,22 @@ do_update() {
   fi
 }
 
+do_aur_update() {
+  print_header "AUR Update (paru)"
+  if ! command -v paru &>/dev/null; then
+    print_warning "paru not found — skipping AUR update"
+    read -r -p "Press Enter to continue..." || true
+    return 0
+  fi
+  if confirm "Update AUR packages?"; then
+    paru -Sua
+    print_success "AUR packages updated"
+    read -r -p "Press Enter to continue..." || true
+  else
+    print_warning "AUR update skipped"
+  fi
+}
+
 do_orphans() {
   print_header "Orphan Packages"
 
@@ -234,6 +250,10 @@ do_quick() {
 
   sudo pacman -Syu --needed --noconfirm
 
+  if command -v paru &>/dev/null; then
+    paru -Sua --noconfirm
+  fi
+
   if orphans=$(pacman -Qtdq 2>/dev/null) && [ -n "$orphans" ]; then
     echo "$orphans" | xargs -r sudo pacman -Rns --noconfirm --
   fi
@@ -256,14 +276,15 @@ show_menu() {
   echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Arch Linux Maintenance Script *${NC}            ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}╠══════════════════════════════════════════════╣${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Full Update                            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} Remove Orphan Packages                 ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Clean Package Cache                    ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Check Database                         ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} List Foreign/AUR Packages              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} System Info                            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} ${BRIGHT_PINK}QUICK MODE${NC} (all safe ops)              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}8)${NC} Run All (interactive)                  ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Full Update (pacman)                   ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} AUR Update (paru)                      ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Remove Orphan Packages                 ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Clean Package Cache                    ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Check Database                         ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} List Foreign/AUR Packages              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} System Info                            ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}8)${NC} ${BRIGHT_PINK}QUICK MODE${NC} (all safe ops)              ${CYAN}${ITALIC}║${NC}"
+  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}9)${NC} Run All (interactive)                  ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                                   ${CYAN}${ITALIC}║${NC}"
   echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
@@ -280,21 +301,23 @@ main() {
 
   while true; do
     show_menu
-    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-8]:${NC} ")" choice || true
+    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-9]:${NC} ")" choice || true
 
     case $choice in
     1) do_update ;;
-    2) do_orphans ;;
-    3) do_cache ;;
-    4) do_db_check ;;
-    5) do_foreign ;;
-    6) do_info ;;
-    7)
+    2) do_aur_update ;;
+    3) do_orphans ;;
+    4) do_cache ;;
+    5) do_db_check ;;
+    6) do_foreign ;;
+    7) do_info ;;
+    8)
       do_quick
       read -r -p "Press Enter to continue..." || true
       ;;
-    8)
+    9)
       do_update
+      do_aur_update
       do_orphans
       do_cache
       do_db_check
