@@ -177,9 +177,10 @@ do_sync() {
   # Generate package lists
   pacman -Qqem > pkglist-aur.txt
   pacman -Qqen > pkglist-native.txt
+  find "$HOME" -maxdepth 4 -name "*.AppImage" 2>/dev/null | sort > pkglist-appimage.txt
 
   # Stage first, then check for changes (covers both new/untracked and modified files)
-  git add pkglist-aur.txt pkglist-native.txt
+  git add pkglist-aur.txt pkglist-native.txt pkglist-appimage.txt
   if git diff --cached --quiet; then
     echo "No changes detected."
     return 0
@@ -718,66 +719,156 @@ do_disable() {
   read -r -p "Press Enter to continue..."
 }
 
+# ─── Menu definition ─────────────────────────────────────────────────────────
+_MENU_INITIALIZED=false
+MENU_KEYS=("s" "1" "2" "3" "4" "r" "w" "d" "p" "g" "0")
+MENU_LABELS=(
+  "SYNC NOW"
+  "Set schedule: Hourly"
+  "Set schedule: Daily"
+  "Set schedule: Weekly"
+  "Toggle boot sync"
+  "Restore from repo"
+  "Show status"
+  "Disable / Remove"
+  "Change save path"
+  "Change GitHub repo"
+  "Exit"
+)
+
+_box_blank() {
+  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
+}
+
+_box_rule() {
+  printf "    ${CYAN}${ITALIC}║${NC}  ${CYAN}─────────────────────────────────────────────────────${NC}${CYAN}${ITALIC}║${NC}\n"
+}
+
+_menu_section() {
+  local title="$1"
+  local prefix="── ${title} "
+  local fill=$(( 53 - ${#prefix} ))
+  [[ $fill -lt 2 ]] && fill=2
+  local dashes="" i
+  for ((i=0; i<fill; i++)); do dashes="${dashes}─"; done
+  printf "    ${CYAN}${ITALIC}║${NC}  ${CYAN}%s%s${NC}${CYAN}${ITALIC}║${NC}\n" "$prefix" "$dashes"
+}
+
+_menu_item() {
+  local key="$1"
+  local label="$2"
+  local is_selected="$3"
+  local pad=$(( 47 - ${#key} - ${#label} ))
+  [[ $pad -lt 0 ]] && pad=0
+
+  if [[ "$is_selected" == "true" ]]; then
+    printf "    ${CYAN}${ITALIC}║${NC}  ${BRIGHT_PINK}> %s -> %s${NC}%*s${CYAN}${ITALIC}║${NC}\n" \
+      "$key" "$label" "$pad" ""
+  elif [[ "$key" == "0" ]]; then
+    printf "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}%s${NC} -> %s%*s${CYAN}${ITALIC}║${NC}\n" \
+      "$key" "$label" "$pad" ""
+  else
+    printf "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}%s${NC} -> %s%*s${CYAN}${ITALIC}║${NC}\n" \
+      "$key" "$label" "$pad" ""
+  fi
+}
+
 # ─── Main menu ────────────────────────────────────────────────────────────────
 show_menu() {
-  clear
-  print_banner
+  local selected="${1:-0}"
 
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
-  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Package List Auto-Sync *${NC}                            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-
-  # Timer status
-  local timer_text
-  if timer_active; then
-    local sched_raw sched_human
-    sched_raw=$(get_timer_schedule)
-    sched_human=$(human_schedule "$sched_raw")
-    timer_text="Timer: ${sched_human}"
-    box_line "$timer_text" "$GREEN"
+  # Determine init sequence outside subshell so the flag mutation takes effect
+  local init_seq
+  if [[ "$_MENU_INITIALIZED" == "false" ]]; then
+    init_seq=$'\033[2J\033[H'
+    _MENU_INITIALIZED=true
   else
-    timer_text="Timer: inactive"
-    box_line "$timer_text" "$RED"
+    init_seq=$'\033[H'
   fi
 
-  # Boot status
-  local boot_text
-  if boot_enabled; then
-    boot_text="Boot:  enabled"
-    box_line "$boot_text" "$GREEN"
-  else
-    boot_text="Boot:  disabled"
-    box_line "$boot_text" "$RED"
-  fi
+  # Build entire frame in a subshell, then flush in one write to avoid flicker
+  local buf
+  buf=$(
+    printf '%s' "$init_seq"
+    printf '\033[?25l'
+    print_banner
 
-  # Save path
-  box_line "Path:  ${REPO_DIR}" "$YELLOW"
+    echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔═══════════════════════════════════════════════════════╗${NC}${CYAN} *"
+    echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Package List Auto-Sync *${NC}                            ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
+    _box_blank
 
-  # GitHub repo
-  box_line "Repo:  $(short_repo)" "$YELLOW"
+    if timer_active; then
+      local sched_raw sched_human
+      sched_raw=$(get_timer_schedule)
+      sched_human=$(human_schedule "$sched_raw")
+      box_line "Timer: ${sched_human}" "$GREEN"
+    else
+      box_line "Timer: inactive" "$RED"
+    fi
 
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Set schedule: Hourly                            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} Set schedule: Daily                             ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Set schedule: Weekly                            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Toggle boot sync                                ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}a)${NC} Change save path                                ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}b)${NC} Change GitHub repo                              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}c)${NC} Restore from repo                               ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Run sync now                                    ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} Show status                                     ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} Disable / Remove                                ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                                            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                                       ${CYAN}${ITALIC}║${NC}"
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
-  echo ""
+    if boot_enabled; then
+      box_line "Boot:  enabled" "$GREEN"
+    else
+      box_line "Boot:  disabled" "$RED"
+    fi
+
+    box_line "Path:  ${REPO_DIR}" "$YELLOW"
+    box_line "Repo:  $(short_repo)" "$YELLOW"
+
+    _box_blank
+    echo -e "    ${CYAN}${ITALIC}╠═══════════════════════════════════════════════════════╣${NC}"
+    _box_blank
+
+    local i
+    for i in "${!MENU_KEYS[@]}"; do
+      case $i in
+        1) _box_blank; _menu_section "Schedule"; _box_blank ;;
+        5) _box_blank; _menu_section "Maintenance"; _box_blank ;;
+        8) _box_blank; _menu_section "Configuration"; _box_blank ;;
+        10) _box_blank; _box_rule ;;
+      esac
+
+      local is_sel="false"
+      [[ "$i" -eq "$selected" ]] && is_sel="true"
+      _menu_item "${MENU_KEYS[$i]}" "${MENU_LABELS[$i]}" "$is_sel"
+    done
+
+    _box_blank
+    echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚═══════════════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+    echo ""
+    echo -e "  ${CYAN}navigate${NC} j/k  ${CYAN}select${NC} Enter  ${CYAN}jump${NC} direct key"
+    printf '\033[?25h'
+  )
+  printf '%s' "$buf"
+}
+
+# ─── Action dispatcher ───────────────────────────────────────────────────────
+execute_action() {
+  local choice="$1"
+  case "$choice" in
+    s) do_run_now ;;
+    1) setup_hourly ;;
+    2) setup_daily ;;
+    3) setup_weekly ;;
+    4)
+      if boot_enabled; then disable_boot; else setup_boot; fi
+      sleep 1
+      ;;
+    r) do_restore ;;
+    w) show_status ;;
+    d) do_disable ;;
+    p) change_path ;;
+    g) change_repo ;;
+    0)
+      echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
+      exit 0
+      ;;
+    *)
+      print_error "Invalid option"
+      sleep 1
+      ;;
+  esac
 }
 
 main() {
@@ -790,35 +881,44 @@ main() {
     exit $?
   fi
 
-  while true; do
-    show_menu
-    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-7, a-c]:${NC} ")" choice
+  local selected=0
+  local num_items=${#MENU_KEYS[@]}
 
-    case $choice in
-      1) setup_hourly ;;
-      2) setup_daily ;;
-      3) setup_weekly ;;
-      4)
-        if boot_enabled; then
-          disable_boot
-        else
-          setup_boot
-        fi
-        sleep 1
-        ;;
-      5) do_run_now ;;
-      6) show_status ;;
-      7) do_disable ;;
-      a|A) change_path ;;
-      b|B) change_repo ;;
-      c|C) do_restore ;;
-      0)
-        echo -e "\n${PINK}*${NC} ${GREEN}Goodbye!${NC} ${PINK}*${NC}\n"
-        exit 0
+  while true; do
+    show_menu "$selected"
+
+    IFS= read -rsn1 key
+
+    # Discard escape sequences (arrow keys etc.)
+    if [[ "$key" == $'\x1b' ]]; then
+      read -rsn2 -t 0.1 2>/dev/null || true
+      continue
+    fi
+
+    case "$key" in
+      j) selected=$(( (selected + 1) % num_items )) ;;
+      k) selected=$(( (selected - 1 + num_items) % num_items )) ;;
+      '')
+        execute_action "${MENU_KEYS[$selected]}"
+        _MENU_INITIALIZED=false
         ;;
       *)
-        print_error "Invalid option"
-        sleep 1
+        local found=false
+        local idx
+        for idx in "${!MENU_KEYS[@]}"; do
+          if [[ "${MENU_KEYS[$idx]}" == "$key" ]]; then
+            selected=$idx
+            execute_action "$key"
+            _MENU_INITIALIZED=false
+            found=true
+            break
+          fi
+        done
+        if [[ "$found" == "false" ]]; then
+          print_error "Invalid option"
+          sleep 1
+          _MENU_INITIALIZED=false
+        fi
         ;;
     esac
   done

@@ -269,53 +269,122 @@ do_quick() {
   do_info false
 }
 
-show_menu() {
-  clear
-  print_banner
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔══════════════════════════════════════════════╗${NC}${CYAN} *"
-  echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Arch Linux Maintenance Script *${NC}            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}╠══════════════════════════════════════════════╣${NC}"
+# ─── Menu definition ─────────────────────────────────────────────────────────
+_MENU_INITIALIZED=false
+MENU_KEYS=("q" "u" "a" "o" "c" "d" "f" "i" "r" "0")
+MENU_LABELS=(
+  "QUICK MODE"
+  "System Update"
+  "AUR Update"
+  "Remove Orphans"
+  "Clean Cache"
+  "Check Database"
+  "List Foreign/AUR"
+  "System Info"
+  "Run All (interactive)"
+  "Exit"
+)
+
+_box_blank() {
   echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}1)${NC} Full Update (pacman)                   ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}2)${NC} AUR Update (paru)                      ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}3)${NC} Remove Orphan Packages                 ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}4)${NC} Clean Package Cache                    ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}5)${NC} Check Database                         ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}6)${NC} List Foreign/AUR Packages              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}7)${NC} System Info                            ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}8)${NC} ${BRIGHT_PINK}QUICK MODE${NC} (all safe ops)              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}9)${NC} Run All (interactive)                  ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}0)${NC} Exit                                   ${CYAN}${ITALIC}║${NC}"
-  echo -e "    ${CYAN}${ITALIC}║${NC}                                              ${CYAN}${ITALIC}║${NC}"
-  echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚══════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
 }
 
-main() {
-  check_sudo
+_box_rule() {
+  printf "    ${CYAN}${ITALIC}║${NC}  ${CYAN}────────────────────────────────────────────${NC}${CYAN}${ITALIC}║${NC}\n"
+}
 
-  if [ "${1:-}" == "--quick" ]; then
-    do_quick
-    exit 0
+_menu_section() {
+  local title="$1"
+  local prefix="── ${title} "
+  local fill=$(( 44 - ${#prefix} ))
+  [[ $fill -lt 2 ]] && fill=2
+  local dashes="" i
+  for ((i=0; i<fill; i++)); do dashes="${dashes}─"; done
+  printf "    ${CYAN}${ITALIC}║${NC}  ${CYAN}%s%s${NC}${CYAN}${ITALIC}║${NC}\n" "$prefix" "$dashes"
+}
+
+_menu_item() {
+  local key="$1"
+  local label="$2"
+  local is_selected="$3"
+  local pad=$(( 38 - ${#key} - ${#label} ))
+  [[ $pad -lt 0 ]] && pad=0
+
+  if [[ "$is_selected" == "true" ]]; then
+    printf "    ${CYAN}${ITALIC}║${NC}  ${BRIGHT_PINK}> %s -> %s${NC}%*s${CYAN}${ITALIC}║${NC}\n" \
+      "$key" "$label" "$pad" ""
+  elif [[ "$key" == "0" ]]; then
+    printf "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${RED}%s${NC} -> %s%*s${CYAN}${ITALIC}║${NC}\n" \
+      "$key" "$label" "$pad" ""
+  else
+    printf "    ${CYAN}${ITALIC}║${NC}  ${PINK}>${NC} ${GREEN}%s${NC} -> %s%*s${CYAN}${ITALIC}║${NC}\n" \
+      "$key" "$label" "$pad" ""
+  fi
+}
+
+# ─── Main menu ────────────────────────────────────────────────────────────────
+show_menu() {
+  local selected="${1:-0}"
+
+  local init_seq
+  if [[ "$_MENU_INITIALIZED" == "false" ]]; then
+    init_seq=$'\033[2J\033[H'
+    _MENU_INITIALIZED=true
+  else
+    init_seq=$'\033[H'
   fi
 
-  while true; do
-    show_menu
-    read -r -p "$(echo -e "${BRIGHT_PINK}Select option [0-9]:${NC} ")" choice || true
+  local buf
+  buf=$(
+    printf '%s' "$init_seq"
+    printf '\033[?25l'
+    print_banner
 
-    case $choice in
-    1) do_update ;;
-    2) do_aur_update ;;
-    3) do_orphans ;;
-    4) do_cache ;;
-    5) do_db_check ;;
-    6) do_foreign ;;
-    7) do_info ;;
-    8)
+    echo -e "  ${CYAN}* ${CYAN}${ITALIC}╔══════════════════════════════════════════════╗${NC}${CYAN} *"
+    echo -e "    ${CYAN}${ITALIC}║${NC} ${BRIGHT_PINK}* Arch Linux Maintenance Script *${NC}            ${CYAN}${ITALIC}║${NC}"
+    echo -e "    ${CYAN}${ITALIC}╠══════════════════════════════════════════════╣${NC}"
+    _box_blank
+
+    local i
+    for i in "${!MENU_KEYS[@]}"; do
+      case $i in
+        1) _box_blank; _menu_section "Updates"; _box_blank ;;
+        3) _box_blank; _menu_section "Maintenance"; _box_blank ;;
+        6) _box_blank; _menu_section "Info"; _box_blank ;;
+        8) _box_blank; _menu_section "Advanced"; _box_blank ;;
+        9) _box_blank; _box_rule ;;
+      esac
+
+      local is_sel="false"
+      [[ "$i" -eq "$selected" ]] && is_sel="true"
+      _menu_item "${MENU_KEYS[$i]}" "${MENU_LABELS[$i]}" "$is_sel"
+    done
+
+    _box_blank
+    echo -e "  ${CYAN}* ${CYAN}${ITALIC}╚══════════════════════════════════════════════╝${NC}${CYAN} *${NC}"
+    echo ""
+    echo -e "  ${CYAN}navigate${NC} j/k  ${CYAN}select${NC} Enter  ${CYAN}jump${NC} direct key"
+    printf '\033[?25h'
+  )
+  printf '%s' "$buf"
+}
+
+# ─── Action dispatcher ───────────────────────────────────────────────────────
+execute_action() {
+  local choice="$1"
+  case "$choice" in
+    q)
       do_quick
       read -r -p "Press Enter to continue..." || true
       ;;
-    9)
+    u) do_update ;;
+    a) do_aur_update ;;
+    o) do_orphans ;;
+    c) do_cache ;;
+    d) do_db_check ;;
+    f) do_foreign ;;
+    i) do_info ;;
+    r)
       do_update
       do_aur_update
       do_orphans
@@ -333,6 +402,55 @@ main() {
       print_error "Invalid option"
       sleep 1
       ;;
+  esac
+}
+
+main() {
+  check_sudo
+
+  if [ "${1:-}" == "--quick" ]; then
+    do_quick
+    exit 0
+  fi
+
+  local selected=0
+  local num_items=${#MENU_KEYS[@]}
+
+  while true; do
+    show_menu "$selected"
+
+    IFS= read -rsn1 key
+
+    if [[ "$key" == $'\x1b' ]]; then
+      read -rsn2 -t 0.1 2>/dev/null || true
+      continue
+    fi
+
+    case "$key" in
+      j) selected=$(( (selected + 1) % num_items )) ;;
+      k) selected=$(( (selected - 1 + num_items) % num_items )) ;;
+      '')
+        execute_action "${MENU_KEYS[$selected]}"
+        _MENU_INITIALIZED=false
+        ;;
+      *)
+        local found=false
+        local idx
+        for idx in "${!MENU_KEYS[@]}"; do
+          if [[ "${MENU_KEYS[$idx]}" == "$key" ]]; then
+            selected=$idx
+            execute_action "$key"
+            _MENU_INITIALIZED=false
+            found=true
+            break
+          fi
+        done
+        if [[ "$found" == "false" ]]; then
+          print_error "Invalid option"
+          sleep 1
+          _MENU_INITIALIZED=false
+        fi
+        ;;
     esac
   done
 }
