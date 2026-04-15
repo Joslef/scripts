@@ -11,7 +11,7 @@ A collection of colorful, interactive shell scripts for system maintenance, medi
 | [audioshell](audioshell/) | Terminal radio player with animated TUI — browse and stream 25 internet radio stations | Both | Live metadata, animated equalizer, pause/resume, disco toggle, 25 curated stations |
 | [brewsync](brewsync/) | Syncs Homebrew and Mac App Store package lists to GitHub — scheduled or on demand | macOS | Launchd timers (hourly/daily/weekly), restore from repo, change detection |
 | [chezclaudesync](chezclaudesync/) | Syncs Claude Code config files into chezmoi for version-controlled backup | Both | Settings, agents, hooks, memory files; secrets-safe (no API keys) |
-| [createloginscreen](createloginscreen/) | Configures the SDDM login screen with Catppuccin Mocha Pink theme, autologin, and display settings | Linux | AUR theme install, drop-in configs, font/clock setup, service enable |
+| [createloginscreen](createloginscreen/) | Interactive TUI for managing SDDM login themes and Quickshell lockscreen themes from the qylock collection | Linux | 25+ themes, j/k cursor navigation, sub-variants (Genshin/Terraria/Clockwork), one-command install |
 | [gitstatus](gitstatus/) | Recursive Git repo health checker — scans directories and flags dirty repos | Both | Remote fetch, dirty-only filter, non-interactive mode (`--scan`), animated spinner |
 | [macfresh](macfresh/) | Interactive macOS maintenance — Homebrew updates, App Store updates, system cleanup | macOS | Quick mode (`--run`), formula/cask/MAS updates, cache cleanup, brew doctor |
 | [pkgsync](pkgsync/) | Syncs Arch Linux package lists to GitHub — scheduled, on boot, or on demand | Linux | Systemd timers, boot sync, restore from repo, AUR helper detection |
@@ -61,9 +61,9 @@ Syncs Claude Code config files — settings, agents, hooks, and memory files —
 
 ### 🔐 createloginscreen
 
-Configures the SDDM login screen with the Catppuccin Mocha Pink theme — installs the AUR package, writes drop-in config files for the theme and autologin, sets font and clock display options, and enables the SDDM systemd service.
+Interactive TUI for setting SDDM login screen and Quickshell lockscreen themes from the [qylock](https://github.com/Darkkal44/qylock) collection. Navigate 25+ animated themes with j/k, confirm with Enter, and apply instantly. Includes an install option that pulls all dependencies and runs the qylock setup scripts.
 
-→ [Full documentation](createloginscreen/README.md) | `sudo createloginscreen`
+→ [Full documentation](createloginscreen/README.md) | `createloginscreen`
 
 ---
 
