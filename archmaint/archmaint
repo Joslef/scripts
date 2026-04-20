@@ -208,6 +208,132 @@ do_db_check() {
   fi
 }
 
+_get_appimage_list() {
+  local pkgsync_config="$HOME/.config/pkgsync/config"
+  local list=""
+
+  if [ -f "$pkgsync_config" ]; then
+    local repo_dir
+    repo_dir=$(bash -c "source '$pkgsync_config' 2>/dev/null && echo \"\$REPO_DIR\"")
+    if [ -n "$repo_dir" ] && [ -f "$repo_dir/pkglist-appimage.txt" ]; then
+      list=$(cat "$repo_dir/pkglist-appimage.txt")
+    fi
+  fi
+
+  if [ -z "$list" ]; then
+    list=$(find "$HOME" -maxdepth 4 -name "*.AppImage" 2>/dev/null | sort) || true
+  fi
+
+  echo "$list"
+}
+
+do_appimage_update() {
+  print_header "AppImage Updates"
+
+  if ! command -v appimageupdatetool &>/dev/null; then
+    print_warning "appimageupdatetool is not installed"
+    echo -e "  Use ${GREEN}n${NC} → Install AppImage Tool to install it first"
+    read -r -p "Press Enter to continue..." || true
+    return 0
+  fi
+
+  local appimage_list
+  appimage_list=$(_get_appimage_list) || true
+
+  if [ -z "$appimage_list" ]; then
+    print_warning "No AppImages found"
+    read -r -p "Press Enter to continue..." || true
+    return 0
+  fi
+
+  local count
+  count=$(echo "$appimage_list" | wc -l)
+  echo "Found $count AppImage(s):"
+  echo "$appimage_list" | while IFS= read -r f; do
+    echo "  - $(basename "$f")"
+  done
+  echo ""
+
+  if ! confirm "Update AppImages?"; then
+    print_warning "AppImage update skipped"
+    read -r -p "Press Enter to continue..." || true
+    return 0
+  fi
+
+  local updated=0 skipped=0 failed=0
+
+  while IFS= read -r appimage; do
+    [ -z "$appimage" ] && continue
+    local name output
+    name=$(basename "$appimage")
+    echo ""
+    echo -e "  ${CYAN}→ ${name}${NC}"
+
+    if ! [ -f "$appimage" ]; then
+      print_warning "  Not found: $appimage"
+      failed=$((failed + 1))
+      continue
+    fi
+
+    output=$(appimageupdatetool "$appimage" 2>&1) && local rc=0 || local rc=$?
+    if [ "$rc" -eq 0 ]; then
+      if echo "$output" | grep -qi "already.*up.to.date\|no update\|is up to date"; then
+        print_success "  Already up to date"
+        skipped=$((skipped + 1))
+      else
+        print_success "  Updated successfully"
+        updated=$((updated + 1))
+      fi
+    else
+      if echo "$output" | grep -qi "no.*update.*information\|cannot.*find.*update\|update information.*not.*embed\|no appstream"; then
+        print_warning "  No update info embedded — manual update needed:"
+        echo -e "    ${CYAN}1)${NC} Download the new version from the app's website or GitHub releases"
+        echo -e "    ${CYAN}2)${NC} Replace: ${ITALIC}$appimage${NC}"
+        echo -e "    ${CYAN}3)${NC} Run: ${ITALIC}chmod +x $appimage${NC}"
+        skipped=$((skipped + 1))
+      else
+        print_error "  Failed"
+        echo "$output" | head -3 | while IFS= read -r line; do echo "    $line"; done
+        failed=$((failed + 1))
+      fi
+    fi
+  done <<< "$appimage_list"
+
+  echo ""
+  echo -e "  ${GREEN}Updated: $updated${NC}  ${YELLOW}Skipped: $skipped${NC}  ${RED}Failed: $failed${NC}"
+  read -r -p "Press Enter to continue..." || true
+}
+
+do_install_appimage_tool() {
+  print_header "Install AppImage Update Tool"
+
+  if command -v appimageupdatetool &>/dev/null; then
+    print_success "appimageupdatetool is already installed"
+    read -r -p "Press Enter to continue..." || true
+    return 0
+  fi
+
+  if ! command -v paru &>/dev/null; then
+    print_error "paru not found — cannot install"
+    read -r -p "Press Enter to continue..." || true
+    return 0
+  fi
+
+  if confirm "Install appimageupdate-git via paru?"; then
+    paru -S appimageupdate-git || true
+    echo ""
+    if command -v appimageupdatetool &>/dev/null; then
+      print_success "appimageupdatetool installed successfully"
+    else
+      print_error "Installation may have failed — check output above"
+    fi
+    read -r -p "Press Enter to continue..." || true
+  else
+    print_warning "Installation skipped"
+    read -r -p "Press Enter to continue..." || true
+  fi
+}
+
 do_foreign() {
   print_header "Foreign/AUR Packages"
 
@@ -254,6 +380,16 @@ do_quick() {
     paru -Sua --noconfirm
   fi
 
+  if command -v appimageupdatetool &>/dev/null; then
+    local ai_list
+    ai_list=$(_get_appimage_list)
+    if [ -n "$ai_list" ]; then
+      while IFS= read -r appimage; do
+        [ -f "$appimage" ] && appimageupdatetool "$appimage" &>/dev/null || true
+      done <<< "$ai_list"
+    fi
+  fi
+
   if orphans=$(pacman -Qtdq 2>/dev/null) && [ -n "$orphans" ]; then
     echo "$orphans" | xargs -r sudo pacman -Rns --noconfirm --
   fi
@@ -271,11 +407,13 @@ do_quick() {
 
 # ─── Menu definition ─────────────────────────────────────────────────────────
 _MENU_INITIALIZED=false
-MENU_KEYS=("q" "u" "a" "o" "c" "d" "f" "i" "r" "0")
+MENU_KEYS=("q" "u" "a" "p" "n" "o" "c" "d" "f" "i" "r" "0")
 MENU_LABELS=(
   "QUICK MODE"
   "System Update"
   "AUR Update"
+  "AppImage Update"
+  "Install AppImage Update Tool"
   "Remove Orphans"
   "Clean Cache"
   "Check Database"
@@ -349,10 +487,10 @@ show_menu() {
     for i in "${!MENU_KEYS[@]}"; do
       case $i in
         1) _box_blank; _menu_section "Updates"; _box_blank ;;
-        3) _box_blank; _menu_section "Maintenance"; _box_blank ;;
-        6) _box_blank; _menu_section "Info"; _box_blank ;;
-        8) _box_blank; _menu_section "Advanced"; _box_blank ;;
-        9) _box_blank; _box_rule ;;
+        5) _box_blank; _menu_section "Maintenance"; _box_blank ;;
+        8) _box_blank; _menu_section "Info"; _box_blank ;;
+        10) _box_blank; _menu_section "Advanced"; _box_blank ;;
+        11) _box_blank; _box_rule ;;
       esac
 
       local is_sel="false"
@@ -371,6 +509,10 @@ show_menu() {
 
 # ─── Action dispatcher ───────────────────────────────────────────────────────
 execute_action() {
+  # Drain any buffered stdin — prevents a trailing Enter (typed after the
+  # jump key) from instantly consuming "Press Enter to continue..." prompts
+  while IFS= read -r -n 1 -s -t 0.001 2>/dev/null; do :; done
+
   local choice="$1"
   case "$choice" in
     q)
@@ -379,6 +521,8 @@ execute_action() {
       ;;
     u) do_update ;;
     a) do_aur_update ;;
+    p) do_appimage_update ;;
+    n) do_install_appimage_tool ;;
     o) do_orphans ;;
     c) do_cache ;;
     d) do_db_check ;;
@@ -387,6 +531,7 @@ execute_action() {
     r)
       do_update
       do_aur_update
+      do_appimage_update
       do_orphans
       do_cache
       do_db_check

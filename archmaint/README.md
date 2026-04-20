@@ -5,6 +5,8 @@ A colorful, interactive Arch Linux maintenance script that keeps your system cle
 ## ✨ Features
 
 - 📦 **Full System Update** — runs `pacman -Syu` with confirmation prompt
+- 🔁 **AUR Update** — updates AUR packages via `paru`
+- 📱 **AppImage Update** — updates AppImages via `appimageupdatetool`, sourcing paths from [pkgsync](../pkgsync/)'s `pkglist-appimage.txt` (falls back to scanning `~/` at depth 4)
 - 🧹 **Orphan Removal** — detects and removes packages no longer needed as dependencies
 - 💾 **Cache Cleanup** — flexible paccache integration with 4 cleanup strategies (keep 3, keep 1, remove uninstalled, dry run)
 - 🔍 **Database Check** — validates the pacman database for errors
@@ -19,28 +21,38 @@ A colorful, interactive Arch Linux maintenance script that keeps your system cle
 # Interactive menu
 archmaint
 
-# Non-interactive quick maintenance (update + orphans + cache + db check + info)
+# Non-interactive quick maintenance (update + AUR + AppImages + orphans + cache + db check + info)
 archmaint --quick
 ```
 
 ## 📋 Menu Options
 
-| Option | Action |
-|--------|--------|
-| `1` | Full system update |
-| `2` | Remove orphan packages |
-| `3` | Clean package cache |
-| `4` | Check package database |
-| `5` | List foreign/AUR packages |
-| `6` | System info |
-| `7` | ⚡ Quick mode (all safe ops, no prompts) |
-| `8` | Run all tasks interactively |
+| Key | Action |
+|-----|--------|
+| `q` | ⚡ Quick mode (all safe ops, no prompts) |
+| `u` | Full system update |
+| `a` | AUR update (paru) |
+| `p` | AppImage update (appimageupdatetool) |
+| `o` | Remove orphan packages |
+| `c` | Clean package cache |
+| `d` | Check package database |
+| `f` | List foreign/AUR packages |
+| `i` | System info |
+| `r` | Run all tasks interactively |
 | `0` | Exit |
+
+Navigate with `j`/`k`, select with Enter, or jump directly with the key.
 
 ## 📦 Dependencies
 
 - `pacman` (standard on Arch)
+- `paru` (optional, for AUR updates)
 - `paccache` from `pacman-contrib` (optional, for cache cleanup — falls back to `pacman -Sc` if missing)
+- `appimageupdatetool` from AUR (optional, for AppImage updates — `paru -S appimageupdatetool-bin`)
+
+## 🔗 pkgsync Integration
+
+When [pkgsync](../pkgsync/) is configured, `archmaint` reads the AppImage path list from its `pkglist-appimage.txt` instead of scanning the filesystem. This makes AppImage updates instant — no directory traversal needed.
 
 ## 🔧 Installation
 

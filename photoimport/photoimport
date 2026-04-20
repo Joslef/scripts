@@ -1,0 +1,181 @@
+#!/bin/bash
+
+set -uo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+print_header() { echo -e "\n${BLUE}=== $1 ===${NC}"; }
+print_success() { echo -e "${GREEN}✓ $1${NC}"; }
+print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
+print_error() { echo -e "${RED}✗ $1${NC}"; }
+
+usage() {
+  echo -e "Usage: ${BOLD}photoimport${NC} [SOURCE] [DEST] [--dry-run] [--run]"
+  echo ""
+  echo -e "  SOURCE     Folder with photos to import (default: /mnt/vault/Bilder/Fotos/import)"
+  echo -e "  DEST       Root photo library folder    (default: /mnt/vault/Bilder/Fotos)"
+  echo ""
+  echo -e "  ${CYAN}--dry-run${NC}  Preview what would be copied — no files are written"
+  echo -e "  ${CYAN}--run${NC}      Skip confirmation prompt and run immediately"
+  echo -e "  ${CYAN}--help${NC}     Show this help"
+  echo ""
+  echo -e "Files are placed into DEST/yyyy/mm/dd/ based on EXIF date."
+  echo -e "Date priority: DateTimeOriginal → CreateDate → FileModifyDate"
+}
+
+check_deps() {
+  local missing=0
+  if ! command -v exiftool &>/dev/null; then
+    print_error "exiftool not found — install: sudo pacman -S perl-image-exiftool"
+    missing=1
+  fi
+  if ! command -v python3 &>/dev/null; then
+    print_error "python3 not found"
+    missing=1
+  fi
+  [[ $missing -eq 0 ]] || exit 1
+}
+
+# ── Defaults ──────────────────────────────────────────────────────────────────
+SRC="/mnt/vault/Bilder/Fotos/import"
+DST="/mnt/vault/Bilder/Fotos"
+DRY_RUN=0
+AUTO_RUN=0
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run|-n) DRY_RUN=1; shift ;;
+    --run|-y)     AUTO_RUN=1; shift ;;
+    --help|-h)    usage; exit 0 ;;
+    -*)           print_error "Unknown flag: $1"; echo ""; usage; exit 1 ;;
+    *)            POSITIONAL+=("$1"); shift ;;
+  esac
+done
+[[ ${#POSITIONAL[@]} -ge 1 ]] && SRC="${POSITIONAL[0]}"
+[[ ${#POSITIONAL[@]} -ge 2 ]] && DST="${POSITIONAL[1]}"
+
+# ── Validate ──────────────────────────────────────────────────────────────────
+check_deps
+
+if [[ ! -d "$SRC" ]]; then
+  print_error "Source folder not found: $SRC"
+  exit 1
+fi
+if [[ ! -d "$DST" ]]; then
+  print_error "Destination folder not found: $DST"
+  exit 1
+fi
+
+FILE_COUNT=$(find "$SRC" -maxdepth 1 -type f | wc -l)
+if [[ $FILE_COUNT -eq 0 ]]; then
+  print_warning "No files found in $SRC — nothing to do."
+  exit 0
+fi
+
+# ── Summary before running ────────────────────────────────────────────────────
+print_header "Import Plan"
+echo -e "  ${CYAN}Source:${NC}      $SRC"
+echo -e "  ${CYAN}Destination:${NC} $DST"
+echo -e "  ${CYAN}Files:${NC}       $FILE_COUNT file(s)"
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo -e "\n  ${YELLOW}⚠ DRY RUN — no files will be written${NC}"
+fi
+
+if [[ $AUTO_RUN -eq 0 ]]; then
+  echo ""
+  read -r -p "Proceed? [Y/n]: " response
+  case "$response" in
+    [nN][oO]|[nN]) echo -e "${YELLOW}⚠ Aborted${NC}"; exit 0 ;;
+  esac
+fi
+
+# ── Core processing via Python ────────────────────────────────────────────────
+print_header "Processing"
+
+PHOTO_SRC="$SRC" \
+PHOTO_DST="$DST" \
+PHOTO_DRY_RUN="$DRY_RUN" \
+PHOTO_GREEN="$GREEN" \
+PHOTO_YELLOW="$YELLOW" \
+PHOTO_RED="$RED" \
+PHOTO_NC="$NC" \
+python3 << 'PYEOF'
+import csv, os, shutil, subprocess, sys
+
+src      = os.environ["PHOTO_SRC"]
+dst      = os.environ["PHOTO_DST"]
+dry_run  = os.environ["PHOTO_DRY_RUN"] == "1"
+G        = os.environ["PHOTO_GREEN"]
+Y        = os.environ["PHOTO_YELLOW"]
+R        = os.environ["PHOTO_RED"]
+NC       = os.environ["PHOTO_NC"]
+
+def best_date(row):
+    for field in ["DateTimeOriginal", "CreateDate", "FileModifyDate"]:
+        val = row.get(field, "").strip()
+        if val and not val.startswith("0000"):
+            return val
+    return None
+
+# Bulk EXIF dump (single exiftool call for speed)
+result = subprocess.run(
+    ["exiftool", "-csv", "-d", "%Y/%m/%d",
+     "-DateTimeOriginal", "-CreateDate", "-FileModifyDate", src],
+    capture_output=True, text=True
+)
+rows = {row["SourceFile"]: row for row in csv.DictReader(result.stdout.splitlines())}
+
+files = sorted(
+    f for f in os.listdir(src)
+    if os.path.isfile(os.path.join(src, f))
+)
+
+copied        = 0
+skipped_exist = 0
+no_date       = []
+
+for fname in files:
+    filepath = os.path.join(src, fname)
+    date = best_date(rows.get(filepath, {}))
+
+    if not date:
+        no_date.append(fname)
+        print(f"  {Y}⚠ no date:{NC} {fname}")
+        continue
+
+    dest_dir  = os.path.join(dst, date)
+    dest_file = os.path.join(dest_dir, fname)
+
+    if os.path.exists(dest_file):
+        skipped_exist += 1
+        continue
+
+    if not dry_run:
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.copy2(filepath, dest_file)
+
+    copied += 1
+    action = "Would copy" if dry_run else "Copied"
+    print(f"  {G}✓{NC} {action}: {fname}  →  {date}/")
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+label = "Would copy" if dry_run else "Copied"
+print(f"\n{'─'*54}")
+print(f"  {G}✓ {label}:{NC}          {copied}")
+if skipped_exist:
+    print(f"  Skipped (already exists): {skipped_exist}")
+if no_date:
+    print(f"  {Y}⚠ No date found (skipped):{NC} {len(no_date)}")
+    for f in no_date:
+        print(f"      · {f}")
+if dry_run:
+    print(f"\n  {Y}⚠ Dry run complete — rerun without --dry-run to copy files{NC}")
+print(f"{'─'*54}")
+PYEOF

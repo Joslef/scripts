@@ -6,7 +6,7 @@ A collection of colorful, interactive shell scripts for system maintenance, medi
 
 | Script | Description | Platform | Highlights |
 |--------|-------------|----------|------------|
-| [archmaint](archmaint/) | Interactive Arch Linux maintenance — system updates, orphan removal, cache cleanup, database checks | Linux | Quick mode (`--quick`), run-all option, system info dashboard |
+| [archmaint](archmaint/) | Interactive Arch Linux maintenance — system updates, AUR, AppImage updates, orphan removal, cache cleanup, database checks | Linux | Quick mode (`--quick`), pkgsync AppImage integration, run-all option, system info dashboard |
 | [changemachine](changemachine/) | Switches Hyprland between machine profiles by toggling tagged config lines | Linux | Two-profile toggle (lggram / gcube), auto-detection, tag-based |
 | [audioshell](audioshell/) | Terminal radio player with animated TUI — browse and stream 25 internet radio stations | Both | Live metadata, animated equalizer, pause/resume, disco toggle, 25 curated stations |
 | [brewsync](brewsync/) | Syncs Homebrew and Mac App Store package lists to GitHub — scheduled or on demand | macOS | Launchd timers (hourly/daily/weekly), restore from repo, change detection |
@@ -14,6 +14,7 @@ A collection of colorful, interactive shell scripts for system maintenance, medi
 | [createloginscreen](createloginscreen/) | Interactive TUI for managing SDDM login themes and Quickshell lockscreen themes from the qylock collection | Linux | 25+ themes, j/k cursor navigation, sub-variants (Genshin/Terraria/Clockwork), one-command install |
 | [gitstatus](gitstatus/) | Recursive Git repo health checker — scans directories and flags dirty repos | Both | Remote fetch, dirty-only filter, non-interactive mode (`--scan`), animated spinner |
 | [macfresh](macfresh/) | Interactive macOS maintenance — Homebrew updates, App Store updates, system cleanup | macOS | Quick mode (`--run`), formula/cask/MAS updates, cache cleanup, brew doctor |
+| [photoimport](photoimport/) | Organises photos from a flat import folder into a `yyyy/mm/dd` hierarchy using EXIF dates | Linux | EXIF date priority, zero-date skipping, dry-run mode, idempotent copy |
 | [pkgsync](pkgsync/) | Syncs Arch Linux package lists to GitHub — scheduled, on boot, or on demand | Linux | Systemd timers, boot sync, restore from repo, AUR helper detection |
 | [switchreso](switchreso/) | Switches monitor resolutions via an interactive TUI — per-display or both at once | Linux | 4K / 2K / 1080p / Steamdeck presets, atomic hyprctl batch, waybar restart |
 
@@ -29,7 +30,7 @@ Switches Hyprland between machine profiles (`lggram` and `gcube`) by toggling co
 
 ### 🛠️ archmaint
 
-Interactive Arch Linux maintenance — system updates, orphan removal, cache cleanup, and database checks. Supports a quick non-interactive mode.
+Interactive Arch Linux maintenance — system updates, AUR updates, AppImage updates (with [pkgsync](pkgsync/) integration), orphan removal, cache cleanup, and database checks. Supports a quick non-interactive mode.
 
 → [Full documentation](archmaint/README.md) | `archmaint` or `archmaint --quick`
 
@@ -80,6 +81,14 @@ Recursively scans a directory tree and reports the health of every Git repositor
 Interactive macOS maintenance — Homebrew formula and cask updates, Mac App Store updates, system cache cleanup, and brew doctor checks. Supports a quick non-interactive mode.
 
 → [Full documentation](macfresh/README.md) | `macfresh` or `macfresh --run`
+
+---
+
+### 📸 photoimport
+
+Imports photos from a flat folder into a `yyyy/mm/dd` directory hierarchy by reading EXIF metadata. Prioritises `DateTimeOriginal` → `CreateDate` → `FileModifyDate`, skips corrupt zero-timestamps, and is safe to re-run (already-present files are skipped). Handles JPG, HEIC, MOV, MP4, PNG, and anything exiftool supports.
+
+→ [Full documentation](photoimport/README.md) | `photoimport` or `photoimport --dry-run`
 
 ---
 
