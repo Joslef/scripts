@@ -17,7 +17,7 @@ print_error() { echo -e "${RED}✗ $1${NC}"; }
 usage() {
   echo -e "Usage: ${BOLD}photoimport${NC} [SOURCE] [DEST] [--dry-run] [--run]"
   echo ""
-  echo -e "  SOURCE     Folder with photos to import (default: /mnt/vault/Bilder/Fotos/import)"
+  echo -e "  SOURCE     Folder with photos to import (default: /mnt/vault/Bilder/import)"
   echo -e "  DEST       Root photo library folder    (default: /mnt/vault/Bilder/Fotos)"
   echo ""
   echo -e "  ${CYAN}--dry-run${NC}  Preview what would be copied — no files are written"
@@ -42,7 +42,7 @@ check_deps() {
 }
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-SRC="/mnt/vault/Bilder/Fotos/import"
+SRC="/mnt/vault/Bilder/import"
 DST="/mnt/vault/Bilder/Fotos"
 DRY_RUN=0
 AUTO_RUN=0
