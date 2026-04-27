@@ -402,11 +402,13 @@ do_install() {
   print_header "Install Qylock"
 
   if [[ ! -d "$QYLOCK_DIR" ]]; then
-    print_error "Qylock directory not found: $QYLOCK_DIR"
-    print_warning "Clone the repo first:"
-    echo "  git clone https://github.com/Darkkal44/qylock $QYLOCK_DIR"
-    read -r -p "Press Enter to continue..." || true
-    return 0
+    print_warning "Qylock not found at $QYLOCK_DIR — cloning now..."
+    if ! git clone https://github.com/Darkkal44/qylock "$QYLOCK_DIR"; then
+      print_error "Clone failed. Check your internet connection and try again."
+      read -r -p "Press Enter to continue..." || true
+      return 0
+    fi
+    print_success "Cloned to $QYLOCK_DIR"
   fi
 
   echo -e "  ${CYAN}Repo:${NC} $QYLOCK_DIR"
