@@ -17,6 +17,9 @@ BRIGHT_PINK='\033[38;5;201m'
 HOT_PINK='\033[38;5;205m'
 
 CONF="$HOME/.config/hypr/hyprland.conf"
+SUNSHINE_CONF="$HOME/.config/sunshine/sunshine.conf"
+IPAD_RESOLUTION="2732x2048@60"
+IPAD_POSITION="7680x0"
 
 # ─── Helper functions ─────────────────────────────────────────────────────────
 print_header()  { echo -e "\n${BLUE}=== $1 ===${NC}"; }
@@ -147,26 +150,47 @@ do_switch() {
   apply_profile "$target"
   print_success "hyprland.conf updated for ${BOLD}${target}${NC}"
 
-  # 2. Machine-specific pre-reload steps
-  if [ "$target" = "ipad" ]; then
-    echo -e "${CYAN}  Creating headless output for iPad/Moonlight...${NC}"
-    hyprctl output create headless &>/dev/null || true
-    sleep 0.5
-    print_success "headless output created"
-  fi
+  # 2. Remove ALL existing headless outputs (counter keeps incrementing, so remove any name)
+  echo -e "${CYAN}  Removing any existing headless outputs...${NC}"
+  hyprctl monitors | grep -oP 'HEADLESS-\d+' | while read -r h; do
+    hyprctl output remove "$h" &>/dev/null || true
+  done
 
-  # 3. Remove stale headless outputs when leaving ipad mode
-  if [ "$current" = "ipad" ] && [ "$target" != "ipad" ]; then
-    echo -e "${CYAN}  Removing headless outputs...${NC}"
-    for h in HEADLESS-1 HEADLESS-2 HEADLESS-3; do
-      hyprctl output remove "$h" &>/dev/null || true
-    done
-    print_success "headless outputs removed"
-  fi
-
-  # 4. Reload hyprland
+  # 3. Reload hyprland
   sleep 0.3
   reload_hyprland
+
+  # 4. Create headless output and configure it, then point Sunshine at it
+  if [ "$target" = "ipad" ]; then
+    sleep 0.5
+    echo -e "${CYAN}  Creating headless output for iPad/Sunshine...${NC}"
+    hyprctl output create headless &>/dev/null || true
+    sleep 0.5
+
+    # Get the actual name Hyprland assigned (counter may be >3)
+    local headless_name
+    headless_name=$(hyprctl monitors | grep -oP 'Monitor HEADLESS-\d+' | awk '{print $2}' | tail -1)
+
+    if [ -n "$headless_name" ]; then
+      # Force the correct resolution/position regardless of what's in hyprland.conf
+      hyprctl keyword monitor "$headless_name,$IPAD_RESOLUTION,$IPAD_POSITION,1" &>/dev/null
+      print_success "headless output $headless_name configured at $IPAD_RESOLUTION $IPAD_POSITION"
+
+      # Headless is always index 2: DP-1(0) + HDMI-A-1(1) are created before reload,
+      # headless is created after — so Sunshine always sees it as monitor index 2.
+      sed -i "s|^output_name = .*|output_name = 2|" "$SUNSHINE_CONF"
+      systemctl --user restart sunshine.service 2>/dev/null || true
+      print_success "Sunshine redirected to $headless_name (index 2)"
+    else
+      print_error "Could not detect headless output name"
+    fi
+
+  elif [ "$current" = "ipad" ]; then
+    # Restore Sunshine to stream HDMI-A-1 (index 1)
+    sed -i "s|^output_name = .*|output_name = 1|" "$SUNSHINE_CONF"
+    systemctl --user restart sunshine.service 2>/dev/null || true
+    print_success "Sunshine restored to HDMI-A-1 (index 1)"
+  fi
 
   # 5. Restart waybar (monitor layout changed)
   sleep 0.5
