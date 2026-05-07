@@ -73,7 +73,7 @@ if [[ ! -d "$DST" ]]; then
   exit 1
 fi
 
-FILE_COUNT=$(find "$SRC" -maxdepth 1 -type f | wc -l)
+FILE_COUNT=$(find "$SRC" -type f | wc -l)
 if [[ $FILE_COUNT -eq 0 ]]; then
   print_warning "No files found in $SRC — nothing to do."
   exit 0
@@ -140,25 +140,26 @@ def dir_hashes(dirpath):
                 hashes.add(file_hash(fpath))
     return hashes
 
-# Bulk EXIF dump (single exiftool call for speed)
+# Bulk EXIF dump (single exiftool call for speed, -r recurses subdirs)
 result = subprocess.run(
-    ["exiftool", "-csv", "-d", "%Y/%m/%d",
+    ["exiftool", "-csv", "-r", "-d", "%Y/%m/%d",
      "-DateTimeOriginal", "-CreateDate", "-FileModifyDate", src],
     capture_output=True, text=True
 )
 rows = {row["SourceFile"]: row for row in csv.DictReader(result.stdout.splitlines())}
 
 files = sorted(
-    f for f in os.listdir(src)
-    if os.path.isfile(os.path.join(src, f))
+    os.path.join(root, f)
+    for root, _, fnames in os.walk(src)
+    for f in fnames
 )
 
 copied     = 0
 duplicates = 0
 no_date    = []
 
-for fname in files:
-    filepath = os.path.join(src, fname)
+for filepath in files:
+    fname = os.path.basename(filepath)
     date = best_date(rows.get(filepath, {}))
 
     if not date:
