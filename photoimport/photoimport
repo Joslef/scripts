@@ -17,7 +17,7 @@ print_error() { echo -e "${RED}✗ $1${NC}"; }
 usage() {
   echo -e "Usage: ${BOLD}photoimport${NC} [SOURCE] [DEST] [--dry-run] [--run]"
   echo ""
-  echo -e "  SOURCE     Folder with photos to import (default: /mnt/vault/Bilder/import)"
+  echo -e "  SOURCE     Folder with photos to import (default: /mnt/vault/Bilder/fotoimport)"
   echo -e "  DEST       Root photo library folder    (default: /mnt/vault/Bilder/Fotos)"
   echo ""
   echo -e "  ${CYAN}--dry-run${NC}  Preview what would be copied — no files are written"
@@ -42,7 +42,7 @@ check_deps() {
 }
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-SRC="/mnt/vault/Bilder/import"
+SRC="/mnt/vault/Bilder/fotoimport"
 DST="/mnt/vault/Bilder/Fotos"
 DRY_RUN=0
 AUTO_RUN=0
@@ -107,7 +107,7 @@ PHOTO_YELLOW="$YELLOW" \
 PHOTO_RED="$RED" \
 PHOTO_NC="$NC" \
 python3 << 'PYEOF'
-import csv, os, shutil, subprocess, sys
+import csv, hashlib, os, shutil, subprocess, sys
 
 src      = os.environ["PHOTO_SRC"]
 dst      = os.environ["PHOTO_DST"]
@@ -124,6 +124,22 @@ def best_date(row):
             return val
     return None
 
+def file_hash(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def dir_hashes(dirpath):
+    hashes = set()
+    if os.path.isdir(dirpath):
+        for fname in os.listdir(dirpath):
+            fpath = os.path.join(dirpath, fname)
+            if os.path.isfile(fpath):
+                hashes.add(file_hash(fpath))
+    return hashes
+
 # Bulk EXIF dump (single exiftool call for speed)
 result = subprocess.run(
     ["exiftool", "-csv", "-d", "%Y/%m/%d",
@@ -137,9 +153,9 @@ files = sorted(
     if os.path.isfile(os.path.join(src, f))
 )
 
-copied        = 0
-skipped_exist = 0
-no_date       = []
+copied     = 0
+duplicates = 0
+no_date    = []
 
 for fname in files:
     filepath = os.path.join(src, fname)
@@ -153,8 +169,17 @@ for fname in files:
     dest_dir  = os.path.join(dst, date)
     dest_file = os.path.join(dest_dir, fname)
 
+    # Fast path: same name already at destination
     if os.path.exists(dest_file):
-        skipped_exist += 1
+        duplicates += 1
+        print(f"  {Y}⊘ duplicate:{NC} {fname}  (already in {date}/)")
+        continue
+
+    # Hash check: same content under a different name in the target date folder
+    incoming_hash = file_hash(filepath)
+    if incoming_hash in dir_hashes(dest_dir):
+        duplicates += 1
+        print(f"  {Y}⊘ duplicate:{NC} {fname}  (same content already in {date}/)")
         continue
 
     if not dry_run:
@@ -169,8 +194,7 @@ for fname in files:
 label = "Would copy" if dry_run else "Copied"
 print(f"\n{'─'*54}")
 print(f"  {G}✓ {label}:{NC}          {copied}")
-if skipped_exist:
-    print(f"  Skipped (already exists): {skipped_exist}")
+print(f"  {Y}⊘ Duplicates not imported:{NC} {duplicates}")
 if no_date:
     print(f"  {Y}⚠ No date found (skipped):{NC} {len(no_date)}")
     for f in no_date:
