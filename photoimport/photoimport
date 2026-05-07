@@ -107,7 +107,7 @@ PHOTO_YELLOW="$YELLOW" \
 PHOTO_RED="$RED" \
 PHOTO_NC="$NC" \
 python3 << 'PYEOF'
-import csv, hashlib, os, shutil, subprocess, sys
+import csv, collections, hashlib, os, shutil, subprocess, sys
 
 src      = os.environ["PHOTO_SRC"]
 dst      = os.environ["PHOTO_DST"]
@@ -154,9 +154,10 @@ files = sorted(
     for f in fnames
 )
 
-copied     = 0
-duplicates = 0
-no_date    = []
+copied      = 0
+duplicates  = 0
+no_date     = []
+copied_dest = []  # track destination paths for Live Photo rotation fix
 
 for filepath in files:
     fname = os.path.basename(filepath)
@@ -188,14 +189,61 @@ for filepath in files:
         shutil.copy2(filepath, dest_file)
 
     copied += 1
+    copied_dest.append(dest_file)
     action = "Would copy" if dry_run else "Copied"
     print(f"  {G}✓{NC} {action}: {fname}  →  {date}/")
+
+# ── Live Photo rotation fix ────────────────────────────────────────────────────
+# EXIF Orientation → QuickTime Rotation mapping
+ORIENT_TO_ROTATION = {1: 0, 3: 180, 6: 90, 8: 270}
+
+# Group newly copied files by (dest_dir, stem) to find HEIC+MOV pairs
+pairs = collections.defaultdict(dict)
+for dest_file in copied_dest:
+    stem, ext = os.path.splitext(os.path.basename(dest_file))
+    pairs[(os.path.dirname(dest_file), stem)][ext.lower()] = dest_file
+
+live_photo_fixed = 0
+print("")
+for (dest_dir, stem), exts in pairs.items():
+    heic = exts.get(".heic")
+    mov  = exts.get(".mov")
+    if not (heic and mov):
+        continue
+
+    r = subprocess.run(
+        ["exiftool", "-csv", "-Orientation#", heic],
+        capture_output=True, text=True
+    )
+    heic_rows = list(csv.DictReader(r.stdout.splitlines()))
+    if not heic_rows:
+        continue
+    try:
+        orient = int(heic_rows[0].get("Orientation", "").strip())
+    except (ValueError, AttributeError):
+        continue
+
+    rotation = ORIENT_TO_ROTATION.get(orient)
+    if rotation is None:
+        continue
+
+    if not dry_run:
+        subprocess.run(
+            ["exiftool", "-overwrite_original", f"-Rotation={rotation}", mov],
+            capture_output=True
+        )
+
+    live_photo_fixed += 1
+    action = "Would fix" if dry_run else "Fixed"
+    print(f"  {G}↻{NC} {action} Live Photo rotation: {os.path.basename(mov)}  (EXIF {orient} → {rotation}°)")
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 label = "Would copy" if dry_run else "Copied"
 print(f"\n{'─'*54}")
 print(f"  {G}✓ {label}:{NC}          {copied}")
 print(f"  {Y}⊘ Duplicates not imported:{NC} {duplicates}")
+if live_photo_fixed:
+    print(f"  {G}↻ Live Photo rotation fixed:{NC} {live_photo_fixed}")
 if no_date:
     print(f"  {Y}⚠ No date found (skipped):{NC} {len(no_date)}")
     for f in no_date:
