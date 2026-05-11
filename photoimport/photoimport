@@ -15,17 +15,22 @@ print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 print_error() { echo -e "${RED}✗ $1${NC}"; }
 
 usage() {
-  echo -e "Usage: ${BOLD}photoimport${NC} [SOURCE] [DEST] [--dry-run] [--run]"
+  echo -e "Usage: ${BOLD}photoimport${NC} [SOURCE] [DEST] [--dry-run] [--run] [--fix-rotation]"
   echo ""
-  echo -e "  SOURCE     Folder with photos to import (default: /mnt/vault/Bilder/fotoimport)"
-  echo -e "  DEST       Root photo library folder    (default: /mnt/vault/Bilder/Fotos)"
+  echo -e "  SOURCE          Folder with photos to import (default: /mnt/vault/Bilder/fotoimport)"
+  echo -e "  DEST            Root photo library folder    (default: /mnt/vault/Bilder/Fotos)"
   echo ""
-  echo -e "  ${CYAN}--dry-run${NC}  Preview what would be copied — no files are written"
-  echo -e "  ${CYAN}--run${NC}      Skip confirmation prompt and run immediately"
-  echo -e "  ${CYAN}--help${NC}     Show this help"
+  echo -e "  ${CYAN}--dry-run${NC}       Preview what would be copied/fixed — no files are written"
+  echo -e "  ${CYAN}--run${NC}           Skip confirmation prompt and run immediately"
+  echo -e "  ${CYAN}--fix-rotation${NC}  Scan a library path and fix Live Photo MOV orientations"
+  echo -e "  ${CYAN}--help${NC}          Show this help"
   echo ""
   echo -e "Files are placed into DEST/yyyy/mm/dd/ based on EXIF date."
   echo -e "Date priority: DateTimeOriginal → CreateDate → FileModifyDate"
+  echo ""
+  echo -e "Standalone rotation fix (no import):"
+  echo -e "  ${CYAN}photoimport --fix-rotation [PATH]${NC}   PATH defaults to DEST if omitted"
+  echo -e "  ${CYAN}photoimport --fix-rotation /mnt/vault/Bilder/Fotos/2026${NC}"
 }
 
 check_deps() {
@@ -46,62 +51,96 @@ SRC="/mnt/vault/Bilder/fotoimport"
 DST="/mnt/vault/Bilder/Fotos"
 DRY_RUN=0
 AUTO_RUN=0
+FIX_ROTATION=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run|-n) DRY_RUN=1; shift ;;
-    --run|-y)     AUTO_RUN=1; shift ;;
-    --help|-h)    usage; exit 0 ;;
-    -*)           print_error "Unknown flag: $1"; echo ""; usage; exit 1 ;;
-    *)            POSITIONAL+=("$1"); shift ;;
+    --dry-run|-n)      DRY_RUN=1; shift ;;
+    --run|-y)          AUTO_RUN=1; shift ;;
+    --fix-rotation|-f) FIX_ROTATION=1; shift ;;
+    --help|-h)         usage; exit 0 ;;
+    -*)                print_error "Unknown flag: $1"; echo ""; usage; exit 1 ;;
+    *)                 POSITIONAL+=("$1"); shift ;;
   esac
 done
-[[ ${#POSITIONAL[@]} -ge 1 ]] && SRC="${POSITIONAL[0]}"
-[[ ${#POSITIONAL[@]} -ge 2 ]] && DST="${POSITIONAL[1]}"
+
+# Positional arg semantics differ by mode:
+#   import mode (--run or no --fix-rotation): [SOURCE] [DEST]
+#   fix-rotation standalone:                  [SCAN_PATH]
+SCAN_PATH="$DST"
+if [[ $FIX_ROTATION -eq 1 && $AUTO_RUN -eq 0 ]]; then
+  [[ ${#POSITIONAL[@]} -ge 1 ]] && SCAN_PATH="${POSITIONAL[0]}"
+else
+  [[ ${#POSITIONAL[@]} -ge 1 ]] && SRC="${POSITIONAL[0]}"
+  [[ ${#POSITIONAL[@]} -ge 2 ]] && DST="${POSITIONAL[1]}" && SCAN_PATH="$DST"
+fi
 
 # ── Validate ──────────────────────────────────────────────────────────────────
 check_deps
 
-if [[ ! -d "$SRC" ]]; then
-  print_error "Source folder not found: $SRC"
-  exit 1
-fi
-if [[ ! -d "$DST" ]]; then
-  print_error "Destination folder not found: $DST"
-  exit 1
-fi
+DO_IMPORT=0
 
-FILE_COUNT=$(find "$SRC" -type f | wc -l)
-if [[ $FILE_COUNT -eq 0 ]]; then
-  print_warning "No files found in $SRC — nothing to do."
-  exit 0
-fi
-
-# ── Summary before running ────────────────────────────────────────────────────
-print_header "Import Plan"
-echo -e "  ${CYAN}Source:${NC}      $SRC"
-echo -e "  ${CYAN}Destination:${NC} $DST"
-echo -e "  ${CYAN}Files:${NC}       $FILE_COUNT file(s)"
-if [[ $DRY_RUN -eq 1 ]]; then
-  echo -e "\n  ${YELLOW}⚠ DRY RUN — no files will be written${NC}"
-fi
-
-if [[ $AUTO_RUN -eq 0 ]]; then
-  echo ""
-  read -r -p "Proceed? [Y/n]: " response
-  case "$response" in
-    [nN][oO]|[nN]) echo -e "${YELLOW}⚠ Aborted${NC}"; exit 0 ;;
-  esac
+if [[ $AUTO_RUN -eq 1 || $FIX_ROTATION -eq 0 ]]; then
+  # Import mode
+  if [[ ! -d "$SRC" ]]; then
+    print_error "Source folder not found: $SRC"; exit 1
+  fi
+  if [[ ! -d "$DST" ]]; then
+    print_error "Destination folder not found: $DST"; exit 1
+  fi
+  FILE_COUNT=$(find "$SRC" -type f | wc -l)
+  if [[ $FILE_COUNT -eq 0 ]]; then
+    print_warning "No files found in $SRC — nothing to do."
+    [[ $FIX_ROTATION -eq 0 ]] && exit 0
+  else
+    DO_IMPORT=1
+  fi
+else
+  # --fix-rotation standalone
+  if [[ ! -d "$SCAN_PATH" ]]; then
+    print_error "Scan path not found: $SCAN_PATH"; exit 1
+  fi
 fi
 
-# ── Core processing via Python ────────────────────────────────────────────────
-print_header "Processing"
+# ── Import plan summary ───────────────────────────────────────────────────────
+if [[ $DO_IMPORT -eq 1 ]]; then
+  print_header "Import Plan"
+  echo -e "  ${CYAN}Source:${NC}      $SRC"
+  echo -e "  ${CYAN}Destination:${NC} $DST"
+  echo -e "  ${CYAN}Files:${NC}       $FILE_COUNT file(s)"
+  [[ $DRY_RUN -eq 1 ]] && echo -e "\n  ${YELLOW}⚠ DRY RUN — no files will be written${NC}"
+  if [[ $AUTO_RUN -eq 0 ]]; then
+    echo ""
+    read -r -p "Proceed? [Y/n]: " response
+    case "$response" in
+      [nN][oO]|[nN]) echo -e "${YELLOW}⚠ Aborted${NC}"; exit 0 ;;
+    esac
+  fi
+fi
 
+# ── Fix-rotation plan summary (standalone) ────────────────────────────────────
+if [[ $FIX_ROTATION -eq 1 && $DO_IMPORT -eq 0 ]]; then
+  print_header "Rotation Fix Plan"
+  echo -e "  ${CYAN}Scan path:${NC}  $SCAN_PATH"
+  [[ $DRY_RUN -eq 1 ]] && echo -e "\n  ${YELLOW}⚠ DRY RUN — no files will be written${NC}"
+  if [[ $AUTO_RUN -eq 0 ]]; then
+    echo ""
+    read -r -p "Proceed? [Y/n]: " response
+    case "$response" in
+      [nN][oO]|[nN]) echo -e "${YELLOW}⚠ Aborted${NC}"; exit 0 ;;
+    esac
+  fi
+fi
+
+# ── Python ────────────────────────────────────────────────────────────────────
 PHOTO_SRC="$SRC" \
 PHOTO_DST="$DST" \
+PHOTO_SCAN_PATH="$SCAN_PATH" \
 PHOTO_DRY_RUN="$DRY_RUN" \
+PHOTO_DO_IMPORT="$DO_IMPORT" \
+PHOTO_FIX_ROTATION="$FIX_ROTATION" \
 PHOTO_GREEN="$GREEN" \
 PHOTO_YELLOW="$YELLOW" \
 PHOTO_RED="$RED" \
@@ -109,13 +148,18 @@ PHOTO_NC="$NC" \
 python3 << 'PYEOF'
 import csv, collections, hashlib, os, shutil, subprocess, sys
 
-src      = os.environ["PHOTO_SRC"]
-dst      = os.environ["PHOTO_DST"]
-dry_run  = os.environ["PHOTO_DRY_RUN"] == "1"
-G        = os.environ["PHOTO_GREEN"]
-Y        = os.environ["PHOTO_YELLOW"]
-R        = os.environ["PHOTO_RED"]
-NC       = os.environ["PHOTO_NC"]
+src          = os.environ["PHOTO_SRC"]
+dst          = os.environ["PHOTO_DST"]
+scan_path    = os.environ["PHOTO_SCAN_PATH"]
+dry_run      = os.environ["PHOTO_DRY_RUN"] == "1"
+do_import    = os.environ["PHOTO_DO_IMPORT"] == "1"
+fix_rotation = os.environ["PHOTO_FIX_ROTATION"] == "1"
+G            = os.environ["PHOTO_GREEN"]
+Y            = os.environ["PHOTO_YELLOW"]
+R            = os.environ["PHOTO_RED"]
+NC           = os.environ["PHOTO_NC"]
+
+ORIENT_TO_ROTATION = {1: 0, 3: 180, 6: 90, 8: 270}
 
 def best_date(row):
     for field in ["DateTimeOriginal", "CreateDate", "FileModifyDate"]:
@@ -140,132 +184,222 @@ def dir_hashes(dirpath):
                 hashes.add(file_hash(fpath))
     return hashes
 
-# Bulk EXIF dump (single exiftool call for speed, -r recurses subdirs)
-result = subprocess.run(
-    ["exiftool", "-csv", "-r", "-d", "%Y/%m/%d",
-     "-DateTimeOriginal", "-CreateDate", "-FileModifyDate", src],
-    capture_output=True, text=True
-)
-rows = {row["SourceFile"]: row for row in csv.DictReader(result.stdout.splitlines())}
+def run_rotation_fix(scan_root, label_suffix=""):
+    """Scan scan_root for HEIC+MOV pairs and fix wrong rotations.
 
-files = sorted(
-    os.path.join(root, f)
-    for root, _, fnames in os.walk(src)
-    for f in fnames
-)
+    Uses os.walk to find pairs (fast, no exiftool per-file), then batches
+    exiftool calls on just the candidate files to avoid NAS timeout issues.
+    """
+    # Phase 1: find pairs via os.walk — no metadata needed
+    candidates = []
+    for root, dirs, files in os.walk(scan_root):
+        dirs.sort()
+        by_lower = {f.lower(): f for f in files}
+        for f in sorted(files):
+            if not f.lower().endswith('.heic'):
+                continue
+            stem = os.path.splitext(f)[0]
+            mov_key = stem.lower() + '.mov'
+            if mov_key in by_lower:
+                candidates.append((
+                    os.path.join(root, f),
+                    os.path.join(root, by_lower[mov_key]),
+                ))
 
+    print(f"  found {len(candidates)} HEIC+MOV pairs, reading metadata …")
+
+    if not candidates:
+        return 0, 0
+
+    # Phase 2: batch exiftool on all candidate files (chunks of 100 pairs)
+    file_meta = {}
+    CHUNK = 100
+    all_files = [p for pair in candidates for p in pair]
+    for i in range(0, len(all_files), CHUNK * 2):
+        batch = all_files[i : i + CHUNK * 2]
+        r = subprocess.run(
+            ["exiftool", "-csv", "-Orientation#", "-VideoFrameRate", "-Rotation"] + batch,
+            capture_output=True, text=True
+        )
+        for row in csv.DictReader(r.stdout.splitlines()):
+            file_meta[row["SourceFile"]] = row
+
+    # Phase 3: check and fix
+    fixed = 0
+    already_correct = 0
+    for heic_path, mov_path in candidates:
+        heic_meta = file_meta.get(heic_path, {})
+        mov_meta  = file_meta.get(mov_path, {})
+
+        # Skip NRT-only MOVs (no video track)
+        if not mov_meta.get("VideoFrameRate", "").strip():
+            continue
+
+        try:
+            orient = int(heic_meta.get("Orientation#", "").strip())
+        except (ValueError, AttributeError):
+            continue
+
+        desired = ORIENT_TO_ROTATION.get(orient)
+        if desired is None:
+            continue
+
+        try:
+            current = int(mov_meta.get("Rotation", "").strip())
+        except (ValueError, AttributeError):
+            current = None
+
+        if current == desired:
+            already_correct += 1
+            continue
+
+        if not dry_run:
+            subprocess.run(
+                ["exiftool", "-overwrite_original", f"-Rotation={desired}", mov_path],
+                capture_output=True
+            )
+
+        fixed += 1
+        action = "Would fix" if dry_run else "Fixed"
+        print(f"  {G}↻{NC} {action} rotation{label_suffix}: {os.path.basename(mov_path)}"
+              f"  (EXIF {orient} → {desired}°)")
+
+    return fixed, already_correct
+
+# ── Import ────────────────────────────────────────────────────────────────────
 copied      = 0
 duplicates  = 0
 no_date     = []
-copied_dest = []  # track destination paths for Live Photo rotation fix
+copied_dest = []
 
-for filepath in files:
-    fname = os.path.basename(filepath)
-    date = best_date(rows.get(filepath, {}))
+if do_import:
+    print(f"\n\033[0;34m=== Processing ===\033[0m")
 
-    if not date:
-        no_date.append(fname)
-        print(f"  {Y}⚠ no date:{NC} {fname}")
-        continue
-
-    dest_dir  = os.path.join(dst, date)
-    dest_file = os.path.join(dest_dir, fname)
-
-    # Fast path: same name already at destination
-    if os.path.exists(dest_file):
-        duplicates += 1
-        print(f"  {Y}⊘ duplicate:{NC} {fname}  (already in {date}/)")
-        continue
-
-    # Hash check: same content under a different name in the target date folder
-    incoming_hash = file_hash(filepath)
-    if incoming_hash in dir_hashes(dest_dir):
-        duplicates += 1
-        print(f"  {Y}⊘ duplicate:{NC} {fname}  (same content already in {date}/)")
-        continue
-
-    if not dry_run:
-        os.makedirs(dest_dir, exist_ok=True)
-        shutil.copy2(filepath, dest_file)
-
-    copied += 1
-    copied_dest.append(dest_file)
-    action = "Would copy" if dry_run else "Copied"
-    print(f"  {G}✓{NC} {action}: {fname}  →  {date}/")
-
-# ── Live Photo rotation fix ────────────────────────────────────────────────────
-# EXIF Orientation → QuickTime Rotation mapping
-ORIENT_TO_ROTATION = {1: 0, 3: 180, 6: 90, 8: 270}
-
-# Group newly copied files by (dest_dir, stem) to find HEIC+MOV pairs
-pairs = collections.defaultdict(dict)
-for dest_file in copied_dest:
-    stem, ext = os.path.splitext(os.path.basename(dest_file))
-    pairs[(os.path.dirname(dest_file), stem)][ext.lower()] = dest_file
-
-live_photo_fixed = 0
-print("")
-for (dest_dir, stem), exts in pairs.items():
-    heic = exts.get(".heic")
-    mov  = exts.get(".mov")
-    if not (heic and mov):
-        continue
-
-    # Skip NRT-only MOVs (audio+metadata, no video track — iPhone stores video in HEIC)
-    vfr = subprocess.run(
-        ["exiftool", "-VideoFrameRate", "-s3", mov],
+    result = subprocess.run(
+        ["exiftool", "-csv", "-r", "-d", "%Y/%m/%d",
+         "-DateTimeOriginal", "-CreateDate", "-FileModifyDate", src],
         capture_output=True, text=True
     )
-    if not vfr.stdout.strip():
-        continue
+    rows = {row["SourceFile"]: row for row in csv.DictReader(result.stdout.splitlines())}
 
-    r = subprocess.run(
-        ["exiftool", "-csv", "-Orientation#", heic],
-        capture_output=True, text=True
+    files = sorted(
+        os.path.join(root, f)
+        for root, _, fnames in os.walk(src)
+        for f in fnames
     )
-    heic_rows = list(csv.DictReader(r.stdout.splitlines()))
-    if not heic_rows:
-        continue
-    try:
-        # Column is "Orientation#" (with hash) when using -Orientation# with -csv
-        orient = int(heic_rows[0].get("Orientation#", "").strip())
-    except (ValueError, AttributeError):
-        continue
 
-    rotation = ORIENT_TO_ROTATION.get(orient)
-    if rotation is None:
-        continue
+    for filepath in files:
+        fname = os.path.basename(filepath)
+        date = best_date(rows.get(filepath, {}))
 
-    # Skip if MOV rotation is already correct
-    cur = subprocess.run(["exiftool", "-Rotation", "-s3", mov], capture_output=True, text=True)
-    try:
-        if int(cur.stdout.strip()) == rotation:
+        if not date:
+            no_date.append(fname)
+            print(f"  {Y}⚠ no date:{NC} {fname}")
             continue
-    except (ValueError, AttributeError):
-        pass
 
-    if not dry_run:
-        subprocess.run(
-            ["exiftool", "-overwrite_original", f"-Rotation={rotation}", mov],
-            capture_output=True
+        dest_dir  = os.path.join(dst, date)
+        dest_file = os.path.join(dest_dir, fname)
+
+        if os.path.exists(dest_file):
+            duplicates += 1
+            print(f"  {Y}⊘ duplicate:{NC} {fname}  (already in {date}/)")
+            continue
+
+        incoming_hash = file_hash(filepath)
+        if incoming_hash in dir_hashes(dest_dir):
+            duplicates += 1
+            print(f"  {Y}⊘ duplicate:{NC} {fname}  (same content already in {date}/)")
+            continue
+
+        if not dry_run:
+            os.makedirs(dest_dir, exist_ok=True)
+            shutil.copy2(filepath, dest_file)
+
+        copied += 1
+        copied_dest.append(dest_file)
+        action = "Would copy" if dry_run else "Copied"
+        print(f"  {G}✓{NC} {action}: {fname}  →  {date}/")
+
+    # Fix rotation for newly imported pairs
+    new_pairs = collections.defaultdict(dict)
+    for dest_file in copied_dest:
+        stem, ext = os.path.splitext(os.path.basename(dest_file))
+        new_pairs[(os.path.dirname(dest_file), stem)][ext.lower()] = dest_file
+
+    # Use run_rotation_fix logic inline for the import batch (already have pairs)
+    print("")
+    import_fixed = 0
+    all_import_files = [p for exts in new_pairs.values() for p in exts.values()]
+    import_meta = {}
+    if all_import_files:
+        r = subprocess.run(
+            ["exiftool", "-csv", "-Orientation#", "-VideoFrameRate", "-Rotation"] + all_import_files,
+            capture_output=True, text=True
         )
+        for row in csv.DictReader(r.stdout.splitlines()):
+            import_meta[row["SourceFile"]] = row
 
-    live_photo_fixed += 1
-    action = "Would fix" if dry_run else "Fixed"
-    print(f"  {G}↻{NC} {action} Live Photo rotation: {os.path.basename(mov)}  (EXIF {orient} → {rotation}°)")
+    for (d, stem), exts in sorted(new_pairs.items()):
+        heic = exts.get(".heic")
+        mov  = exts.get(".mov")
+        if not (heic and mov):
+            continue
+        heic_meta = import_meta.get(heic, {})
+        mov_meta  = import_meta.get(mov, {})
+        if not mov_meta.get("VideoFrameRate", "").strip():
+            continue
+        try:
+            orient = int(heic_meta.get("Orientation#", "").strip())
+        except (ValueError, AttributeError):
+            continue
+        desired = ORIENT_TO_ROTATION.get(orient)
+        if desired is None:
+            continue
+        try:
+            current = int(mov_meta.get("Rotation", "").strip())
+        except (ValueError, AttributeError):
+            current = None
+        if current == desired:
+            continue
+        if not dry_run:
+            subprocess.run(
+                ["exiftool", "-overwrite_original", f"-Rotation={desired}", mov],
+                capture_output=True
+            )
+        import_fixed += 1
+        action = "Would fix" if dry_run else "Fixed"
+        print(f"  {G}↻{NC} {action} rotation: {os.path.basename(mov)}  (EXIF {orient} → {desired}°)")
 
-# ── Summary ───────────────────────────────────────────────────────────────────
-label = "Would copy" if dry_run else "Copied"
-print(f"\n{'─'*54}")
-print(f"  {G}✓ {label}:{NC}          {copied}")
-print(f"  {Y}⊘ Duplicates not imported:{NC} {duplicates}")
-if live_photo_fixed:
-    print(f"  {G}↻ Live Photo rotation fixed:{NC} {live_photo_fixed}")
-if no_date:
-    print(f"  {Y}⚠ No date found (skipped):{NC} {len(no_date)}")
-    for f in no_date:
-        print(f"      · {f}")
-if dry_run:
-    print(f"\n  {Y}⚠ Dry run complete — rerun without --dry-run to copy files{NC}")
-print(f"{'─'*54}")
+    label = "Would copy" if dry_run else "Copied"
+    print(f"\n{'─'*54}")
+    print(f"  {G}✓ {label}:{NC}          {copied}")
+    print(f"  {Y}⊘ Duplicates not imported:{NC} {duplicates}")
+    if import_fixed:
+        print(f"  {G}↻ Live Photo rotation fixed:{NC} {import_fixed}")
+    if no_date:
+        print(f"  {Y}⚠ No date found (skipped):{NC} {len(no_date)}")
+        for f in no_date:
+            print(f"      · {f}")
+    if dry_run:
+        print(f"\n  {Y}⚠ Dry run complete — rerun without --dry-run to copy files{NC}")
+    print(f"{'─'*54}")
+
+# ── Full-library / targeted rotation fix ─────────────────────────────────────
+if fix_rotation:
+    print(f"\n\033[0;34m=== Scanning for Rotation Issues ===\033[0m")
+    print(f"  {Y}scanning {scan_path} …{NC}\n")
+
+    fixed, already_correct = run_rotation_fix(scan_path)
+
+    print(f"\n{'─'*54}")
+    if fixed:
+        print(f"  {G}↻ Rotation fixed:{NC}     {fixed}")
+    else:
+        print(f"  {G}✓ No rotation issues found{NC}")
+    if already_correct:
+        print(f"  {G}✓ Already correct:{NC}    {already_correct}")
+    if dry_run:
+        print(f"\n  {Y}⚠ Dry run — rerun without --dry-run to apply fixes{NC}")
+    print(f"{'─'*54}")
+
 PYEOF
