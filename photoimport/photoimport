@@ -159,7 +159,18 @@ Y            = os.environ["PHOTO_YELLOW"]
 R            = os.environ["PHOTO_RED"]
 NC           = os.environ["PHOTO_NC"]
 
-ORIENT_TO_ROTATION = {1: 0, 3: 180, 6: 90, 8: 270}
+def parse_qt_rotation(text):
+    """Parse a QuickTime Rotation text or numeric string to degrees (0/90/180/270)."""
+    text = (text or "").strip()
+    if not text or "normal" in text.lower():
+        return 0
+    for deg in (270, 180, 90):
+        if str(deg) in text:
+            return deg
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 def best_date(row):
     for field in ["DateTimeOriginal", "CreateDate", "FileModifyDate"]:
@@ -218,7 +229,7 @@ def run_rotation_fix(scan_root, label_suffix=""):
     for i in range(0, len(all_files), CHUNK * 2):
         batch = all_files[i : i + CHUNK * 2]
         r = subprocess.run(
-            ["exiftool", "-csv", "-Orientation#", "-VideoFrameRate", "-Rotation"] + batch,
+            ["exiftool", "-csv", "-VideoFrameRate", "-Rotation"] + batch,
             capture_output=True, text=True
         )
         for row in csv.DictReader(r.stdout.splitlines()):
@@ -235,12 +246,9 @@ def run_rotation_fix(scan_root, label_suffix=""):
         if not mov_meta.get("VideoFrameRate", "").strip():
             continue
 
-        try:
-            orient = int(heic_meta.get("Orientation#", "").strip())
-        except (ValueError, AttributeError):
-            continue
-
-        desired = ORIENT_TO_ROTATION.get(orient)
+        # Use HEIC QuickTime Rotation as the ground truth — covers all orientations
+        # including mirror variants (Orientation 2,4,5,7) that EXIF# mapping missed
+        desired = parse_qt_rotation(heic_meta.get("Rotation", ""))
         if desired is None:
             continue
 
@@ -262,7 +270,7 @@ def run_rotation_fix(scan_root, label_suffix=""):
         fixed += 1
         action = "Would fix" if dry_run else "Fixed"
         print(f"  {G}↻{NC} {action} rotation{label_suffix}: {os.path.basename(mov_path)}"
-              f"  (EXIF {orient} → {desired}°)")
+              f"  (→ {desired}°)")
 
     return fixed, already_correct
 
@@ -333,7 +341,7 @@ if do_import:
     import_meta = {}
     if all_import_files:
         r = subprocess.run(
-            ["exiftool", "-csv", "-Orientation#", "-VideoFrameRate", "-Rotation"] + all_import_files,
+            ["exiftool", "-csv", "-VideoFrameRate", "-Rotation"] + all_import_files,
             capture_output=True, text=True
         )
         for row in csv.DictReader(r.stdout.splitlines()):
@@ -348,11 +356,7 @@ if do_import:
         mov_meta  = import_meta.get(mov, {})
         if not mov_meta.get("VideoFrameRate", "").strip():
             continue
-        try:
-            orient = int(heic_meta.get("Orientation#", "").strip())
-        except (ValueError, AttributeError):
-            continue
-        desired = ORIENT_TO_ROTATION.get(orient)
+        desired = parse_qt_rotation(heic_meta.get("Rotation", ""))
         if desired is None:
             continue
         try:
@@ -368,7 +372,7 @@ if do_import:
             )
         import_fixed += 1
         action = "Would fix" if dry_run else "Fixed"
-        print(f"  {G}↻{NC} {action} rotation: {os.path.basename(mov)}  (EXIF {orient} → {desired}°)")
+        print(f"  {G}↻{NC} {action} rotation: {os.path.basename(mov)}  ({desired}°)")
 
     label = "Would copy" if dry_run else "Copied"
     print(f"\n{'─'*54}")
