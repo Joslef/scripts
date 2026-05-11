@@ -292,7 +292,8 @@ def run_rotation_fix(scan_root, label_suffix=""):
     for i in range(0, len(all_files), CHUNK * 2):
         batch = all_files[i : i + CHUNK * 2]
         r = subprocess.run(
-            ["exiftool", "-csv", "-VideoFrameRate", "-Rotation"] + batch,
+            ["exiftool", "-csv", "-Orientation#", "-ImageWidth", "-ImageHeight",
+             "-VideoFrameRate", "-Rotation"] + batch,
             capture_output=True, text=True
         )
         for row in csv.DictReader(r.stdout.splitlines()):
@@ -309,11 +310,30 @@ def run_rotation_fix(scan_root, label_suffix=""):
         if not mov_meta.get("VideoFrameRate", "").strip():
             continue
 
-        # Use HEIC QuickTime Rotation as the ground truth — covers all orientations
-        # including mirror variants (Orientation 2,4,5,7) that EXIF# mapping missed
-        desired = parse_qt_rotation(heic_meta.get("Rotation", ""))
-        if desired is None:
+        try:
+            heic_orient = int(heic_meta.get("Orientation#", "1").strip() or "1")
+        except (ValueError, AttributeError):
+            heic_orient = 1
+
+        qt_rotation = parse_qt_rotation(heic_meta.get("Rotation", ""))
+
+        if heic_orient in (5, 7):
+            # Mirror+rotate orientations: HEIC QT Rotation is misleading for MOV.
+            # iPhone already wrote the correct MOV rotation; leave it alone.
+            already_correct += 1
             continue
+        elif qt_rotation == 0:
+            # Zero-rotation HEIC (Orientation 1/2/4 or re-encoded mirror selfie).
+            # Use pixel dimensions to infer desired rotation: portrait → 90°, landscape → 0°.
+            try:
+                w = int(heic_meta.get("ImageWidth", "0").strip())
+                h = int(heic_meta.get("ImageHeight", "0").strip())
+            except (ValueError, AttributeError):
+                continue
+            desired = 90 if h > w else 0
+        else:
+            # Non-mirror, non-zero rotation: HEIC QT Rotation == correct MOV rotation.
+            desired = qt_rotation
 
         try:
             current = int(mov_meta.get("Rotation", "").strip())
@@ -404,7 +424,8 @@ if do_import:
     import_meta = {}
     if all_import_files:
         r = subprocess.run(
-            ["exiftool", "-csv", "-VideoFrameRate", "-Rotation"] + all_import_files,
+            ["exiftool", "-csv", "-Orientation#", "-ImageWidth", "-ImageHeight",
+             "-VideoFrameRate", "-Rotation"] + all_import_files,
             capture_output=True, text=True
         )
         for row in csv.DictReader(r.stdout.splitlines()):
@@ -419,7 +440,22 @@ if do_import:
         mov_meta  = import_meta.get(mov, {})
         if not mov_meta.get("VideoFrameRate", "").strip():
             continue
-        desired = parse_qt_rotation(heic_meta.get("Rotation", ""))
+        try:
+            heic_orient = int(heic_meta.get("Orientation#", "1").strip() or "1")
+        except (ValueError, AttributeError):
+            heic_orient = 1
+        qt_rotation = parse_qt_rotation(heic_meta.get("Rotation", ""))
+        if heic_orient in (5, 7):
+            continue  # misleading QT rotation; iPhone set MOV correctly
+        elif qt_rotation == 0:
+            try:
+                w = int(heic_meta.get("ImageWidth", "0").strip())
+                h = int(heic_meta.get("ImageHeight", "0").strip())
+            except (ValueError, AttributeError):
+                continue
+            desired = 90 if h > w else 0
+        else:
+            desired = qt_rotation
         if desired is None:
             continue
         try:
