@@ -227,12 +227,15 @@ def fix_heic_mirroring(heic_paths, dry_run):
         except (ValueError, AttributeError):
             continue
 
-        # Only fix Orientation=4 (Mirror vertical = upside-down in non-Apple viewers)
-        if orient != 4:
+        # Fix all mirror orientations — Immich/Linux viewers apply rotation but not mirroring,
+        # causing wrong display: Orientation 2 (mirror H), 4 (mirror V), 5 (mirror H+270),
+        # 7 (mirror H+90) all need pixel-level correction via magick -auto-orient
+        if orient not in (2, 4, 5, 7):
             continue
 
         action = "Would fix" if dry_run else "Fixed"
-        print(f"  {G}⟳{NC} {action} HEIC orientation: {os.path.basename(path)}  (mirror vertical → normal)")
+        orient_desc = {2: "mirror H", 4: "mirror V", 5: "mirror H+270°", 7: "mirror H+90°"}.get(orient, f"orient {orient}")
+        print(f"  {G}⟳{NC} {action} HEIC orientation: {os.path.basename(path)}  ({orient_desc} → normal)")
 
         if dry_run:
             fixed += 1
