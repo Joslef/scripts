@@ -377,7 +377,7 @@ do_quick() {
   sudo pacman -Syu --needed --noconfirm
 
   if command -v paru &>/dev/null; then
-    paru -Sua --noconfirm
+    paru -Sua --noconfirm || print_warning "AUR update failed (see above)"
   fi
 
   if command -v appimageupdatetool &>/dev/null; then
