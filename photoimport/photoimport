@@ -211,6 +211,14 @@ for (dest_dir, stem), exts in pairs.items():
     if not (heic and mov):
         continue
 
+    # Skip NRT-only MOVs (audio+metadata, no video track — iPhone stores video in HEIC)
+    vfr = subprocess.run(
+        ["exiftool", "-VideoFrameRate", "-s3", mov],
+        capture_output=True, text=True
+    )
+    if not vfr.stdout.strip():
+        continue
+
     r = subprocess.run(
         ["exiftool", "-csv", "-Orientation#", heic],
         capture_output=True, text=True
@@ -219,13 +227,22 @@ for (dest_dir, stem), exts in pairs.items():
     if not heic_rows:
         continue
     try:
-        orient = int(heic_rows[0].get("Orientation", "").strip())
+        # Column is "Orientation#" (with hash) when using -Orientation# with -csv
+        orient = int(heic_rows[0].get("Orientation#", "").strip())
     except (ValueError, AttributeError):
         continue
 
     rotation = ORIENT_TO_ROTATION.get(orient)
     if rotation is None:
         continue
+
+    # Skip if MOV rotation is already correct
+    cur = subprocess.run(["exiftool", "-Rotation", "-s3", mov], capture_output=True, text=True)
+    try:
+        if int(cur.stdout.strip()) == rotation:
+            continue
+    except (ValueError, AttributeError):
+        pass
 
     if not dry_run:
         subprocess.run(
