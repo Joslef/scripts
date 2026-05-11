@@ -43,6 +43,10 @@ check_deps() {
     print_error "python3 not found"
     missing=1
   fi
+  if ! command -v magick &>/dev/null; then
+    print_error "magick not found — install: sudo pacman -S imagemagick"
+    missing=1
+  fi
   [[ $missing -eq 0 ]] || exit 1
 }
 
@@ -194,6 +198,62 @@ def dir_hashes(dirpath):
             if os.path.isfile(fpath):
                 hashes.add(file_hash(fpath))
     return hashes
+
+def fix_heic_mirroring(heic_paths, dry_run):
+    """Re-encode HEICs with mirror orientations (Orientation=4) using magick -auto-orient.
+
+    Orientation=4 (Mirror vertical) causes images to appear upside-down in viewers
+    that don't handle HEIF container mirroring. magick -auto-orient bakes the flip
+    into the pixels and sets Orientation=1, making them display correctly everywhere.
+    Returns count of files fixed.
+    """
+    import tempfile
+    # Batch exiftool to get Orientation# for candidate HEICs
+    file_meta = {}
+    CHUNK = 200
+    for i in range(0, len(heic_paths), CHUNK):
+        batch = heic_paths[i:i+CHUNK]
+        r = subprocess.run(
+            ["exiftool", "-csv", "-Orientation#"] + batch,
+            capture_output=True, text=True
+        )
+        for row in csv.DictReader(r.stdout.splitlines()):
+            file_meta[row["SourceFile"]] = row
+
+    fixed = 0
+    for path in heic_paths:
+        try:
+            orient = int(file_meta.get(path, {}).get("Orientation#", "").strip())
+        except (ValueError, AttributeError):
+            continue
+
+        # Only fix Orientation=4 (Mirror vertical = upside-down in non-Apple viewers)
+        if orient != 4:
+            continue
+
+        action = "Would fix" if dry_run else "Fixed"
+        print(f"  {G}⟳{NC} {action} HEIC orientation: {os.path.basename(path)}  (mirror vertical → normal)")
+
+        if dry_run:
+            fixed += 1
+            continue
+
+        # Re-encode in-place via temp file so original is safe if magick fails
+        dirpath = os.path.dirname(path)
+        fd, tmp = tempfile.mkstemp(suffix='.heic', dir=dirpath)
+        os.close(fd)
+        result = subprocess.run(
+            ["magick", path, "-auto-orient", tmp],
+            capture_output=True
+        )
+        if result.returncode == 0:
+            os.replace(tmp, path)
+            fixed += 1
+        else:
+            os.unlink(tmp)
+            print(f"  {R}✗{NC} magick failed for {os.path.basename(path)}")
+
+    return fixed
 
 def run_rotation_fix(scan_root, label_suffix=""):
     """Scan scan_root for HEIC+MOV pairs and fix wrong rotations.
@@ -374,12 +434,18 @@ if do_import:
         action = "Would fix" if dry_run else "Fixed"
         print(f"  {G}↻{NC} {action} rotation: {os.path.basename(mov)}  ({desired}°)")
 
+    # Fix HEIC mirror orientation for newly imported HEICs
+    imported_heics = [p for p in copied_dest if p.lower().endswith('.heic')]
+    heic_orient_fixed = fix_heic_mirroring(imported_heics, dry_run)
+
     label = "Would copy" if dry_run else "Copied"
     print(f"\n{'─'*54}")
     print(f"  {G}✓ {label}:{NC}          {copied}")
     print(f"  {Y}⊘ Duplicates not imported:{NC} {duplicates}")
     if import_fixed:
         print(f"  {G}↻ Live Photo rotation fixed:{NC} {import_fixed}")
+    if heic_orient_fixed:
+        print(f"  {G}⟳ HEIC orientation fixed:{NC}   {heic_orient_fixed}")
     if no_date:
         print(f"  {Y}⚠ No date found (skipped):{NC} {len(no_date)}")
         for f in no_date:
@@ -393,15 +459,30 @@ if fix_rotation:
     print(f"\n\033[0;34m=== Scanning for Rotation Issues ===\033[0m")
     print(f"  {Y}scanning {scan_path} …{NC}\n")
 
-    fixed, already_correct = run_rotation_fix(scan_path)
+    # MOV rotation fix
+    mov_fixed, already_correct = run_rotation_fix(scan_path)
+
+    # HEIC mirror orientation fix — collect all HEICs in scan_path
+    all_heics = [
+        os.path.join(root, f)
+        for root, _, files in os.walk(scan_path)
+        for f in sorted(files)
+        if f.lower().endswith('.heic')
+    ]
+    print(f"\n  checking {len(all_heics)} HEIC files for mirror orientation …")
+    heic_fixed = fix_heic_mirroring(all_heics, dry_run)
 
     print(f"\n{'─'*54}")
-    if fixed:
-        print(f"  {G}↻ Rotation fixed:{NC}     {fixed}")
+    if mov_fixed:
+        print(f"  {G}↻ MOV rotation fixed:{NC}     {mov_fixed}")
     else:
-        print(f"  {G}✓ No rotation issues found{NC}")
+        print(f"  {G}✓ No MOV rotation issues{NC}")
+    if heic_fixed:
+        print(f"  {G}⟳ HEIC orientation fixed:{NC} {heic_fixed}")
+    else:
+        print(f"  {G}✓ No HEIC orientation issues{NC}")
     if already_correct:
-        print(f"  {G}✓ Already correct:{NC}    {already_correct}")
+        print(f"  {G}✓ MOV already correct:{NC}    {already_correct}")
     if dry_run:
         print(f"\n  {Y}⚠ Dry run — rerun without --dry-run to apply fixes{NC}")
     print(f"{'─'*54}")
