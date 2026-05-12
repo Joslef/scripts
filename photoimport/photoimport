@@ -47,6 +47,10 @@ check_deps() {
     print_error "magick not found — install: sudo pacman -S imagemagick"
     missing=1
   fi
+  if ! command -v ffmpeg &>/dev/null; then
+    print_error "ffmpeg not found — install: sudo pacman -S ffmpeg"
+    missing=1
+  fi
   [[ $missing -eq 0 ]] || exit 1
 }
 
@@ -150,7 +154,7 @@ PHOTO_YELLOW="$YELLOW" \
 PHOTO_RED="$RED" \
 PHOTO_NC="$NC" \
 python3 << 'PYEOF'
-import csv, collections, hashlib, os, shutil, subprocess, sys
+import csv, collections, hashlib, os, shutil, subprocess, sys, tempfile
 
 src          = os.environ["PHOTO_SRC"]
 dst          = os.environ["PHOTO_DST"]
@@ -164,7 +168,6 @@ R            = os.environ["PHOTO_RED"]
 NC           = os.environ["PHOTO_NC"]
 
 def parse_qt_rotation(text):
-    """Parse a QuickTime Rotation text or numeric string to degrees (0/90/180/270)."""
     text = (text or "").strip()
     if not text or "normal" in text.lower():
         return 0
@@ -200,15 +203,19 @@ def dir_hashes(dirpath):
     return hashes
 
 def fix_heic_mirroring(heic_paths, dry_run):
-    """Re-encode HEICs with mirror orientations (Orientation=4) using magick -auto-orient.
+    """Re-encode HEICs with mirror orientations using the correct per-orientation pixel transform.
 
-    Orientation=4 (Mirror vertical) causes images to appear upside-down in viewers
-    that don't handle HEIF container mirroring. magick -auto-orient bakes the flip
-    into the pixels and sets Orientation=1, making them display correctly everywhere.
+    magick -auto-orient is a no-op on HEIC files — it re-encodes but never applies the transform
+    to pixels. Explicit geometric ops must be used instead:
+      Orientation 2 (mirror H)     → -flop
+      Orientation 4 (mirror V)     → -flip
+      Orientation 5 (mirror H+270) → -transpose
+      Orientation 7 (mirror H+90)  → -transverse
     Returns count of files fixed.
     """
-    import tempfile
-    # Batch exiftool to get Orientation# for candidate HEICs
+    ORIENT_OP   = {2: "-flop", 4: "-flip", 5: "-transpose", 7: "-transverse"}
+    ORIENT_DESC = {2: "mirror H", 4: "mirror V", 5: "mirror H+270°", 7: "mirror H+90°"}
+
     file_meta = {}
     CHUNK = 200
     for i in range(0, len(heic_paths), CHUNK):
@@ -227,26 +234,23 @@ def fix_heic_mirroring(heic_paths, dry_run):
         except (ValueError, AttributeError):
             continue
 
-        # Fix all mirror orientations — Immich/Linux viewers apply rotation but not mirroring,
-        # causing wrong display: Orientation 2 (mirror H), 4 (mirror V), 5 (mirror H+270),
-        # 7 (mirror H+90) all need pixel-level correction via magick -auto-orient
-        if orient not in (2, 4, 5, 7):
+        op = ORIENT_OP.get(orient)
+        if not op:
             continue
 
         action = "Would fix" if dry_run else "Fixed"
-        orient_desc = {2: "mirror H", 4: "mirror V", 5: "mirror H+270°", 7: "mirror H+90°"}.get(orient, f"orient {orient}")
+        orient_desc = ORIENT_DESC.get(orient, f"orient {orient}")
         print(f"  {G}⟳{NC} {action} HEIC orientation: {os.path.basename(path)}  ({orient_desc} → normal)")
 
         if dry_run:
             fixed += 1
             continue
 
-        # Re-encode in-place via temp file so original is safe if magick fails
         dirpath = os.path.dirname(path)
         fd, tmp = tempfile.mkstemp(suffix='.heic', dir=dirpath)
         os.close(fd)
         result = subprocess.run(
-            ["magick", path, "-auto-orient", tmp],
+            ["magick", path, op, tmp],
             capture_output=True
         )
         if result.returncode == 0:
@@ -258,13 +262,9 @@ def fix_heic_mirroring(heic_paths, dry_run):
 
     return fixed
 
-def run_rotation_fix(scan_root, label_suffix=""):
-    """Scan scan_root for HEIC+MOV pairs and fix wrong rotations.
 
-    Uses os.walk to find pairs (fast, no exiftool per-file), then batches
-    exiftool calls on just the candidate files to avoid NAS timeout issues.
-    """
-    # Phase 1: find pairs via os.walk — no metadata needed
+def run_rotation_fix(scan_root, label_suffix=""):
+    """Scan scan_root for HEIC+MOV pairs and fix wrong MOV rotations."""
     candidates = []
     for root, dirs, files in os.walk(scan_root):
         dirs.sort()
@@ -285,7 +285,6 @@ def run_rotation_fix(scan_root, label_suffix=""):
     if not candidates:
         return 0, 0
 
-    # Phase 2: batch exiftool on all candidate files (chunks of 100 pairs)
     file_meta = {}
     CHUNK = 100
     all_files = [p for pair in candidates for p in pair]
@@ -299,14 +298,12 @@ def run_rotation_fix(scan_root, label_suffix=""):
         for row in csv.DictReader(r.stdout.splitlines()):
             file_meta[row["SourceFile"]] = row
 
-    # Phase 3: check and fix
     fixed = 0
     already_correct = 0
     for heic_path, mov_path in candidates:
         heic_meta = file_meta.get(heic_path, {})
         mov_meta  = file_meta.get(mov_path, {})
 
-        # Skip NRT-only MOVs (no video track)
         if not mov_meta.get("VideoFrameRate", "").strip():
             continue
 
@@ -318,13 +315,10 @@ def run_rotation_fix(scan_root, label_suffix=""):
         qt_rotation = parse_qt_rotation(heic_meta.get("Rotation", ""))
 
         if heic_orient in (5, 7):
-            # Mirror+rotate orientations: HEIC QT Rotation is misleading for MOV.
-            # iPhone already wrote the correct MOV rotation; leave it alone.
+            # Selfie mirror orientations: MOV has diagonal flip matrix — fixed at import via ffmpeg
             already_correct += 1
             continue
         elif qt_rotation == 0:
-            # Zero-rotation HEIC (Orientation 1/2/4 or re-encoded mirror selfie).
-            # Use pixel dimensions to infer desired rotation: portrait → 90°, landscape → 0°.
             try:
                 w = int(heic_meta.get("ImageWidth", "0").strip())
                 h = int(heic_meta.get("ImageHeight", "0").strip())
@@ -332,7 +326,6 @@ def run_rotation_fix(scan_root, label_suffix=""):
                 continue
             desired = 90 if h > w else 0
         else:
-            # Non-mirror, non-zero rotation: HEIC QT Rotation == correct MOV rotation.
             desired = qt_rotation
 
         try:
@@ -357,18 +350,17 @@ def run_rotation_fix(scan_root, label_suffix=""):
 
     return fixed, already_correct
 
-# ── Import ────────────────────────────────────────────────────────────────────
-copied      = 0
-duplicates  = 0
-no_date     = []
-copied_dest = []
 
+# ── Import ────────────────────────────────────────────────────────────────────
 if do_import:
     print(f"\n\033[0;34m=== Processing ===\033[0m")
 
+    # Single exiftool pass: dates + orientation metadata for all source files
     result = subprocess.run(
         ["exiftool", "-csv", "-r", "-d", "%Y/%m/%d",
-         "-DateTimeOriginal", "-CreateDate", "-FileModifyDate", src],
+         "-DateTimeOriginal", "-CreateDate", "-FileModifyDate",
+         "-Orientation#", "-ImageWidth", "-ImageHeight",
+         "-VideoFrameRate", "-Rotation", src],
         capture_output=True, text=True
     )
     rows = {row["SourceFile"]: row for row in csv.DictReader(result.stdout.splitlines())}
@@ -379,65 +371,23 @@ if do_import:
         for f in fnames
     )
 
-    for filepath in files:
-        fname = os.path.basename(filepath)
-        date = best_date(rows.get(filepath, {}))
-
-        if not date:
-            no_date.append(fname)
-            print(f"  {Y}⚠ no date:{NC} {fname}")
-            continue
-
-        dest_dir  = os.path.join(dst, date)
-        dest_file = os.path.join(dest_dir, fname)
-
-        if os.path.exists(dest_file):
-            duplicates += 1
-            print(f"  {Y}⊘ duplicate:{NC} {fname}  (already in {date}/)")
-            continue
-
-        incoming_hash = file_hash(filepath)
-        if incoming_hash in dir_hashes(dest_dir):
-            duplicates += 1
-            print(f"  {Y}⊘ duplicate:{NC} {fname}  (same content already in {date}/)")
-            continue
-
-        if not dry_run:
-            os.makedirs(dest_dir, exist_ok=True)
-            shutil.copy2(filepath, dest_file)
-
-        copied += 1
-        copied_dest.append(dest_file)
-        action = "Would copy" if dry_run else "Copied"
-        print(f"  {G}✓{NC} {action}: {fname}  →  {date}/")
-
-    # Fix rotation for newly imported pairs
-    new_pairs = collections.defaultdict(dict)
-    for dest_file in copied_dest:
-        stem, ext = os.path.splitext(os.path.basename(dest_file))
-        new_pairs[(os.path.dirname(dest_file), stem)][ext.lower()] = dest_file
-
-    # Use run_rotation_fix logic inline for the import batch (already have pairs)
+    # Phase 1: fix orientations in source (fotoimport) BEFORE copying to library
     print("")
-    import_fixed = 0
-    all_import_files = [p for exts in new_pairs.values() for p in exts.values()]
-    import_meta = {}
-    if all_import_files:
-        r = subprocess.run(
-            ["exiftool", "-csv", "-Orientation#", "-ImageWidth", "-ImageHeight",
-             "-VideoFrameRate", "-Rotation"] + all_import_files,
-            capture_output=True, text=True
-        )
-        for row in csv.DictReader(r.stdout.splitlines()):
-            import_meta[row["SourceFile"]] = row
+    src_by_stem = collections.defaultdict(dict)
+    for filepath in files:
+        stem, ext = os.path.splitext(os.path.basename(filepath))
+        src_by_stem[(os.path.dirname(filepath), stem)][ext.lower()] = filepath
 
-    for (d, stem), exts in sorted(new_pairs.items()):
+    import_fixed_mov = 0
+    ffmpeg_movs_src  = []
+
+    for (d, stem), exts in sorted(src_by_stem.items()):
         heic = exts.get(".heic")
         mov  = exts.get(".mov")
         if not (heic and mov):
             continue
-        heic_meta = import_meta.get(heic, {})
-        mov_meta  = import_meta.get(mov, {})
+        heic_meta = rows.get(heic, {})
+        mov_meta  = rows.get(mov, {})
         if not mov_meta.get("VideoFrameRate", "").strip():
             continue
         try:
@@ -445,8 +395,11 @@ if do_import:
         except (ValueError, AttributeError):
             heic_orient = 1
         qt_rotation = parse_qt_rotation(heic_meta.get("Rotation", ""))
+
         if heic_orient in (5, 7):
-            continue  # misleading QT rotation; iPhone set MOV correctly
+            # Selfie: MOV has diagonal flip matrix — needs ffmpeg pixel rewrite
+            ffmpeg_movs_src.append(mov)
+            continue
         elif qt_rotation == 0:
             try:
                 w = int(heic_meta.get("ImageWidth", "0").strip())
@@ -456,33 +409,91 @@ if do_import:
             desired = 90 if h > w else 0
         else:
             desired = qt_rotation
-        if desired is None:
-            continue
+            if desired is None:
+                continue
+
         try:
             current = int(mov_meta.get("Rotation", "").strip())
         except (ValueError, AttributeError):
             current = None
         if current == desired:
             continue
+
         if not dry_run:
             subprocess.run(
                 ["exiftool", "-overwrite_original", f"-Rotation={desired}", mov],
                 capture_output=True
             )
-        import_fixed += 1
+        import_fixed_mov += 1
         action = "Would fix" if dry_run else "Fixed"
         print(f"  {G}↻{NC} {action} rotation: {os.path.basename(mov)}  ({desired}°)")
 
-    # Fix HEIC mirror orientation for newly imported HEICs
-    imported_heics = [p for p in copied_dest if p.lower().endswith('.heic')]
-    heic_orient_fixed = fix_heic_mirroring(imported_heics, dry_run)
+    # ffmpeg fix for selfie Live Photo MOVs in source
+    selfie_fixed = 0
+    for mov_path in ffmpeg_movs_src:
+        action = "Would fix" if dry_run else "Fixed"
+        print(f"  {G}⟳{NC} {action} selfie MOV: {os.path.basename(mov_path)}")
+        if dry_run:
+            selfie_fixed += 1
+            continue
+        fd, tmp = tempfile.mkstemp(suffix='.mov', dir='/tmp')
+        os.close(fd)
+        result = subprocess.run(
+            ["ffmpeg", "-noautorotate", "-i", mov_path, "-vf", "transpose=0",
+             "-c:v", "libx265", "-crf", "18", "-c:a", "copy", "-y", tmp],
+            capture_output=True
+        )
+        if result.returncode == 0:
+            shutil.move(tmp, mov_path)  # shutil.move handles cross-device (tmpfs → NAS)
+            selfie_fixed += 1
+        else:
+            try: os.unlink(tmp)
+            except FileNotFoundError: pass
+            print(f"  {R}✗{NC} ffmpeg failed for {os.path.basename(mov_path)}")
+
+    # Fix HEIC mirror orientations in source
+    src_heics = [f for f in files if f.lower().endswith('.heic')]
+    heic_orient_fixed = fix_heic_mirroring(src_heics, dry_run)
+
+    # Phase 2: copy already-fixed files to destination
+    print("")
+    copied     = 0
+    duplicates = 0
+    no_date    = []
+
+    for filepath in files:
+        fname = os.path.basename(filepath)
+        date = best_date(rows.get(filepath, {}))
+        if not date:
+            no_date.append(fname)
+            print(f"  {Y}⚠ no date:{NC} {fname}")
+            continue
+        dest_dir  = os.path.join(dst, date)
+        dest_file = os.path.join(dest_dir, fname)
+        if os.path.exists(dest_file):
+            duplicates += 1
+            print(f"  {Y}⊘ duplicate:{NC} {fname}  (already in {date}/)")
+            continue
+        incoming_hash = file_hash(filepath)
+        if incoming_hash in dir_hashes(dest_dir):
+            duplicates += 1
+            print(f"  {Y}⊘ duplicate:{NC} {fname}  (same content already in {date}/)")
+            continue
+        if not dry_run:
+            os.makedirs(dest_dir, exist_ok=True)
+            shutil.copy2(filepath, dest_file)
+        copied += 1
+        action = "Would copy" if dry_run else "Copied"
+        print(f"  {G}✓{NC} {action}: {fname}  →  {date}/")
 
     label = "Would copy" if dry_run else "Copied"
     print(f"\n{'─'*54}")
     print(f"  {G}✓ {label}:{NC}          {copied}")
     print(f"  {Y}⊘ Duplicates not imported:{NC} {duplicates}")
-    if import_fixed:
-        print(f"  {G}↻ Live Photo rotation fixed:{NC} {import_fixed}")
+    if import_fixed_mov:
+        print(f"  {G}↻ Live Photo rotation fixed:{NC} {import_fixed_mov}")
+    if selfie_fixed:
+        print(f"  {G}⟳ Selfie MOV fixed (ffmpeg):{NC} {selfie_fixed}")
     if heic_orient_fixed:
         print(f"  {G}⟳ HEIC orientation fixed:{NC}   {heic_orient_fixed}")
     if no_date:
@@ -493,15 +504,14 @@ if do_import:
         print(f"\n  {Y}⚠ Dry run complete — rerun without --dry-run to copy files{NC}")
     print(f"{'─'*54}")
 
+
 # ── Full-library / targeted rotation fix ─────────────────────────────────────
 if fix_rotation:
     print(f"\n\033[0;34m=== Scanning for Rotation Issues ===\033[0m")
     print(f"  {Y}scanning {scan_path} …{NC}\n")
 
-    # MOV rotation fix
     mov_fixed, already_correct = run_rotation_fix(scan_path)
 
-    # HEIC mirror orientation fix — collect all HEICs in scan_path
     all_heics = [
         os.path.join(root, f)
         for root, _, files in os.walk(scan_path)
