@@ -382,6 +382,19 @@ if do_import:
         stem, ext = os.path.splitext(os.path.basename(filepath))
         src_by_stem[(os.path.dirname(filepath), stem)][ext.lower()] = filepath
 
+    # Inherit date from HEIC for Live Photo MOVs that have no date metadata
+    # (re-encoded MOVs lose DateTimeOriginal; iPhone MOVs often only carry CreateDate)
+    for (d_dir, stem), exts in src_by_stem.items():
+        heic = exts.get(".heic")
+        mov  = exts.get(".mov")
+        if not (heic and mov):
+            continue
+        if best_date(rows.get(mov, {})):
+            continue
+        heic_date = best_date(rows.get(heic, {}))
+        if heic_date:
+            rows.setdefault(mov, {})["DateTimeOriginal"] = heic_date
+
     import_fixed_mov = 0
     ffmpeg_movs_src  = []
 
