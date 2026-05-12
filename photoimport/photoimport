@@ -319,12 +319,16 @@ def run_rotation_fix(scan_root, label_suffix=""):
             already_correct += 1
             continue
         elif qt_rotation == 0:
-            try:
-                w = int(heic_meta.get("ImageWidth", "0").strip())
-                h = int(heic_meta.get("ImageHeight", "0").strip())
-            except (ValueError, AttributeError):
-                continue
-            desired = 90 if h > w else 0
+            if heic_orient in (3, 4):
+                # Upside-down capture (rotate-180 or mirror-V): MOV also needs 180°
+                desired = 180
+            else:
+                try:
+                    w = int(heic_meta.get("ImageWidth", "0").strip())
+                    h = int(heic_meta.get("ImageHeight", "0").strip())
+                except (ValueError, AttributeError):
+                    continue
+                desired = 90 if h > w else 0
         else:
             desired = qt_rotation
 
@@ -401,12 +405,16 @@ if do_import:
             ffmpeg_movs_src.append(mov)
             continue
         elif qt_rotation == 0:
-            try:
-                w = int(heic_meta.get("ImageWidth", "0").strip())
-                h = int(heic_meta.get("ImageHeight", "0").strip())
-            except (ValueError, AttributeError):
-                continue
-            desired = 90 if h > w else 0
+            if heic_orient in (3, 4):
+                # Upside-down capture (rotate-180 or mirror-V): MOV also needs 180°
+                desired = 180
+            else:
+                try:
+                    w = int(heic_meta.get("ImageWidth", "0").strip())
+                    h = int(heic_meta.get("ImageHeight", "0").strip())
+                except (ValueError, AttributeError):
+                    continue
+                desired = 90 if h > w else 0
         else:
             desired = qt_rotation
             if desired is None:
