@@ -16,7 +16,7 @@ PINK='\033[38;5;198m'
 BRIGHT_PINK='\033[38;5;201m'
 HOT_PINK='\033[38;5;205m'
 
-CONF="$HOME/.config/hypr/hyprland.conf"
+CONF="$HOME/.config/hypr/hyprland.lua"
 SUNSHINE_CONF="$HOME/.config/sunshine/sunshine.conf"
 IPAD_RESOLUTION="2732x2048@60"
 IPAD_POSITION="7680x0"
@@ -56,18 +56,18 @@ print_banner() {
 # ─── Detect current machine profile ──────────────────────────────────────────
 detect_machine() {
   # Match lines whose first non-whitespace char is NOT '#' (i.e. active lines)
-  # ipad: any uncommented line tagged # ipad
-  if grep -qP '^\s*[^#\s].*#\s*ipad\s*$' "$CONF" 2>/dev/null; then
+  # ipad: any uncommented line tagged -- ipad
+  if grep -qP '^\s*(?!--).*--\s*ipad\b' "$CONF" 2>/dev/null; then
     echo "ipad"
-  # lggram: any uncommented line tagged # lggram
-  elif grep -qP '^\s*[^#\s].*#\s*lggram\s*$' "$CONF" 2>/dev/null; then
+  # lggram: any uncommented line tagged -- lggram
+  elif grep -qP '^\s*(?!--).*--\s*lggram\b' "$CONF" 2>/dev/null; then
     echo "lggram"
   else
     echo "gcube"
   fi
 }
 
-# ─── Toggle comments in hyprland.conf ────────────────────────────────────────
+# ─── Toggle comments in hyprland.lua ─────────────────────────────────────────
 apply_profile() {
   local target="$1"
   python3 - "$CONF" "$target" <<'PYEOF'
@@ -94,22 +94,22 @@ with open(conf) as f:
 
 out = []
 for line in lines:
-    m = re.search(r'#\s*(gcube|lggram|ipad)\s*$', line)
+    m = re.search(r'--\s*(gcube|lggram|ipad)\b', line)
     if m:
         tag     = m.group(1)
         raw     = line.rstrip('\n')
         nl      = '\n' if line.endswith('\n') else ''
         stripped = raw.lstrip()
         indent   = raw[:len(raw) - len(stripped)]
-        is_commented = stripped.startswith('#')
+        is_commented = stripped.startswith('--')
 
         if tag in enable and is_commented:
-            # Uncomment: remove the leading "# " (one level only)
-            stripped = re.sub(r'^#\s?', '', stripped, count=1)
+            # Uncomment: remove the leading "-- " (one level only)
+            stripped = re.sub(r'^--\s?', '', stripped, count=1)
             line = indent + stripped + nl
         elif tag in disable and not is_commented:
             # Comment out
-            line = indent + '# ' + stripped + nl
+            line = indent + '-- ' + stripped + nl
     out.append(line)
 
 with open(conf, 'w') as f:
@@ -146,9 +146,9 @@ do_switch() {
 
   print_header "Switching  ${current}  →  ${target}"
 
-  # 1. Edit hyprland.conf
+  # 1. Edit hyprland.lua
   apply_profile "$target"
-  print_success "hyprland.conf updated for ${BOLD}${target}${NC}"
+  print_success "hyprland.lua updated for ${BOLD}${target}${NC}"
 
   # 2. Remove ALL existing headless outputs (counter keeps incrementing, so remove any name)
   echo -e "${CYAN}  Removing any existing headless outputs...${NC}"
@@ -172,7 +172,7 @@ do_switch() {
     headless_name=$(hyprctl monitors | grep -oP 'Monitor HEADLESS-\d+' | awk '{print $2}' | tail -1)
 
     if [ -n "$headless_name" ]; then
-      # Force the correct resolution/position regardless of what's in hyprland.conf
+      # Force the correct resolution/position regardless of what's in hyprland.lua
       hyprctl keyword monitor "$headless_name,$IPAD_RESOLUTION,$IPAD_POSITION,1" &>/dev/null
       print_success "headless output $headless_name configured at $IPAD_RESOLUTION $IPAD_POSITION"
 
