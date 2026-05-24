@@ -174,6 +174,39 @@ do_sync() {
     git remote set-url origin "$REMOTE_URL"
   fi
 
+  # Pull remote lists and install any missing packages
+  if git fetch origin main 2>/dev/null; then
+    local remote_native remote_aur
+    remote_native=$(git show origin/main:pkglist-native.txt 2>/dev/null || true)
+    remote_aur=$(git show origin/main:pkglist-aur.txt 2>/dev/null || true)
+
+    if [ -n "$remote_native" ]; then
+      local missing_native
+      missing_native=$(comm -23 <(echo "$remote_native" | sort) <(pacman -Qqen | sort))
+      if [ -n "$missing_native" ]; then
+        echo "Installing missing native packages: $(echo "$missing_native" | tr '\n' ' ')"
+        local -a native_pkgs
+        mapfile -t native_pkgs < <(echo "$missing_native" | tr -d '\r')
+        sudo pacman -S --needed --noconfirm "${native_pkgs[@]}" 2>&1 || true
+      fi
+    fi
+
+    if [ -n "$remote_aur" ]; then
+      local aur_helper
+      aur_helper=$(detect_aur_helper)
+      if [ -n "$aur_helper" ]; then
+        local missing_aur
+        missing_aur=$(comm -23 <(echo "$remote_aur" | sort) <(pacman -Qqem | sort))
+        if [ -n "$missing_aur" ]; then
+          echo "Installing missing AUR packages via $aur_helper: $(echo "$missing_aur" | tr '\n' ' ')"
+          local -a aur_pkgs
+          mapfile -t aur_pkgs < <(echo "$missing_aur" | tr -d '\r')
+          "$aur_helper" -S --needed --noconfirm "${aur_pkgs[@]}" 2>&1 || true
+        fi
+      fi
+    fi
+  fi
+
   # Generate package lists
   pacman -Qqem > pkglist-aur.txt
   pacman -Qqen > pkglist-native.txt
