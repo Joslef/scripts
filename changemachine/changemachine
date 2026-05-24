@@ -57,10 +57,10 @@ print_banner() {
 detect_machine() {
   # Match lines whose first non-whitespace char is NOT '#' (i.e. active lines)
   # ipad: any uncommented line tagged -- ipad
-  if grep -qP '^\s*(?!--).*--\s*ipad\b' "$CONF" 2>/dev/null; then
+  if grep -qP '^\s*[^-\s].*--\s*ipad\b' "$CONF" 2>/dev/null; then
     echo "ipad"
   # lggram: any uncommented line tagged -- lggram
-  elif grep -qP '^\s*(?!--).*--\s*lggram\b' "$CONF" 2>/dev/null; then
+  elif grep -qP '^\s*[^-\s].*--\s*lggram\b' "$CONF" 2>/dev/null; then
     echo "lggram"
   else
     echo "gcube"
@@ -159,6 +159,17 @@ do_switch() {
   # 3. Reload hyprland
   sleep 0.3
   reload_hyprland
+
+  # 4a. Apply per-profile overrides (Lua config fields ignored by Hyprland for these)
+  sleep 0.2
+  if [ "$target" = "lggram" ]; then
+    hyprctl keyword monitor "eDP-1,2560x1600@60,0x0,1" &>/dev/null
+    hyprctl keyword input:kb_layout de &>/dev/null
+    print_success "eDP-1 scale 1.0, keyboard layout: de"
+  elif [ "$target" = "gcube" ] || [ "$target" = "ipad" ]; then
+    hyprctl keyword input:kb_layout us &>/dev/null
+    print_success "keyboard layout: us"
+  fi
 
   # 4. Create headless output and configure it, then point Sunshine at it
   if [ "$target" = "ipad" ]; then
