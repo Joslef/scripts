@@ -33,6 +33,7 @@ declare -a ANIM_COLORS
 declare -a STATION_NAMES=(
   "amambient"
   "ambientradio"
+  "cafedelmarradio"
   "anotherplanet"
   "cliqhop"
   "costadelmar"
@@ -47,6 +48,8 @@ declare -a STATION_NAMES=(
   "egosun"
   "groovesalad"
   "groovesaladclassic"
+  "ibizaglobal"
+  "ibizalive"
   "missioncontrol"
   "psyradio"
   "schizoid"
@@ -73,6 +76,9 @@ get_station_url() {
     sleepingpill)       echo "http://s.stereoscenic.com/asp-h.pls" ;;
     schizoid)           echo "http://schizoid.in/schizoid-chill.pls" ;;
     costadelmar)        echo "https://radio4.cdm-radio.com:18020/stream-mp3-Chill" ;;
+    cafedelmarradio) echo "https://streams.radio.co/se1a320b47/listen" ;;
+    ibizaglobal) echo "http://ibizaglobalradio.streaming-pro.com:8024/" ;;
+    ibizalive) echo "https://streaming.broadcast.radio/ibiza-live-radio" ;;
     amambient)          echo "http://radio.stereoscenic.com/ama-h" ;;
     zerobeat)           echo "http://zerobeatzone.mrg.fm:8800/stream3" ;;
     ambientradio)       echo "http://listen.mrg.fm:8888/stream" ;;
