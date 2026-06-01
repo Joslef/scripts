@@ -92,6 +92,9 @@ else:
 with open(conf) as f:
     lines = f.readlines()
 
+# Remove any dynamic headless configs added by _setup_ipad_headless
+lines = [l for l in lines if '-- ipad-headless' not in l]
+
 out = []
 for line in lines:
     m = re.search(r'--\s*(gcube|lggram|ipad)\b', line)
@@ -132,6 +135,45 @@ reload_hyprland() {
   print_success "hyprland config reloaded"
 }
 
+# ─── Create/refresh iPad headless output ─────────────────────────────────────
+_setup_ipad_headless() {
+  # Reuse existing headless if present — only create if none exists.
+  # Creating increments Hyprland's internal HEADLESS-N counter; reusing avoids drift.
+  # NEVER write headless config to hyprland.lua — hyprctl reload destroys IPC-created
+  # outputs and re-creates them under a new counter value. Use hyprctl eval only.
+  local headless_name
+  headless_name=$(hyprctl monitors all | grep -oP 'Monitor HEADLESS-\d+' | awk '{print $2}' | tail -1)
+
+  if [ -z "$headless_name" ]; then
+    echo -e "${CYAN}  Creating headless output for iPad/Sunshine...${NC}"
+    hyprctl output create headless &>/dev/null || true
+    sleep 0.8
+    headless_name=$(hyprctl monitors all | grep -oP 'Monitor HEADLESS-\d+' | awk '{print $2}' | tail -1)
+  else
+    echo -e "${CYAN}  Reusing existing $headless_name output...${NC}"
+  fi
+
+  if [ -n "$headless_name" ]; then
+    # Configure resolution/scale via eval — no reload, no lua changes.
+    local res="${IPAD_RESOLUTION%@*}"   # 2732x2048@60 → 2732x2048
+    local rate="${IPAD_RESOLUTION#*@}"  # 2732x2048@60 → 60
+    hyprctl eval "hl.monitor({output=\"${headless_name}\", mode=\"${res}@${rate}\", position=\"${IPAD_POSITION}\", scale=1})" &>/dev/null || true
+    sleep 0.3
+    print_success "headless output $headless_name configured at $IPAD_RESOLUTION $IPAD_POSITION"
+
+    # Sunshine must match by output NAME (not numeric index) — the headless has no
+    # description so numeric output_name causes Sunshine to fall back to DP-1.
+    sed -i "s/^output_name\s*=.*/output_name = ${headless_name}/" "$SUNSHINE_CONF"
+    print_success "sunshine.conf output_name → $headless_name"
+
+    XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart sunshine.service 2>/dev/null || true
+    sleep 0.5
+    print_success "Sunshine restarted"
+  else
+    print_error "Could not detect headless output name"
+  fi
+}
+
 # ─── Switch to a machine profile ─────────────────────────────────────────────
 do_switch() {
   local target="$1"
@@ -139,6 +181,16 @@ do_switch() {
   current=$(detect_machine)
 
   if [ "$current" = "$target" ]; then
+    if [ "$target" = "ipad" ]; then
+      print_header "Refreshing iPad headless output"
+      _setup_ipad_headless
+      sleep 0.5
+      restart_waybar
+      echo ""
+      print_success "${BOLD}${HOT_PINK}Active machine: ${target}${NC}"
+      sleep 1.5
+      return
+    fi
     print_warning "Already on ${BOLD}${target}${NC} — nothing to do"
     sleep 1.5
     return
@@ -150,57 +202,29 @@ do_switch() {
   apply_profile "$target"
   print_success "hyprland.lua updated for ${BOLD}${target}${NC}"
 
-  # 2. Remove ALL existing headless outputs (counter keeps incrementing, so remove any name)
-  echo -e "${CYAN}  Removing any existing headless outputs...${NC}"
-  hyprctl monitors | grep -oP 'HEADLESS-\d+' | while read -r h; do
-    hyprctl output remove "$h" &>/dev/null || true
-  done
-
-  # 3. Reload hyprland
-  sleep 0.3
-  reload_hyprland
-
-  # 4a. Apply per-profile overrides (Lua config fields ignored by Hyprland for these)
-  sleep 0.2
-  if [ "$target" = "lggram" ]; then
-    hyprctl keyword monitor "eDP-1,2560x1600@60,0x0,1" &>/dev/null
-    hyprctl keyword input:kb_layout de &>/dev/null
-    print_success "eDP-1 scale 1.0, keyboard layout: de"
-  elif [ "$target" = "gcube" ] || [ "$target" = "ipad" ]; then
-    hyprctl keyword input:kb_layout us &>/dev/null
-    print_success "keyboard layout: us"
+  # 2. Remove headless outputs only when switching AWAY from ipad — keep them
+  #    when switching TO ipad so _setup_ipad_headless can reuse without bumping the counter.
+  if [ "$target" != "ipad" ]; then
+    echo -e "${CYAN}  Removing headless outputs...${NC}"
+    hyprctl monitors all | grep -oP 'HEADLESS-\d+' | while read -r h; do
+      hyprctl output remove "$h" &>/dev/null || true
+    done
+    sleep 0.3
   fi
 
-  # 4. Create headless output and configure it, then point Sunshine at it
+  # 3. Reload hyprland
+  reload_hyprland
+
+  # 4a. Apply per-profile overrides (lggram: force eDP-1 scale=1; hyprland auto-calculates 1.6 from DPI)
+  sleep 0.2
+  if [ "$target" = "lggram" ]; then
+    hyprctl eval 'hl.monitor({output="eDP-1", mode="2560x1600@60", position="0x0", scale=1})' &>/dev/null
+    print_success "eDP-1 scale forced to 1.0"
+  fi
+
+  # 4. Create headless output (ipad only)
   if [ "$target" = "ipad" ]; then
-    sleep 0.5
-    echo -e "${CYAN}  Creating headless output for iPad/Sunshine...${NC}"
-    hyprctl output create headless &>/dev/null || true
-    sleep 0.5
-
-    # Get the actual name Hyprland assigned (counter may be >3)
-    local headless_name
-    headless_name=$(hyprctl monitors | grep -oP 'Monitor HEADLESS-\d+' | awk '{print $2}' | tail -1)
-
-    if [ -n "$headless_name" ]; then
-      # Force the correct resolution/position regardless of what's in hyprland.lua
-      hyprctl keyword monitor "$headless_name,$IPAD_RESOLUTION,$IPAD_POSITION,1" &>/dev/null
-      print_success "headless output $headless_name configured at $IPAD_RESOLUTION $IPAD_POSITION"
-
-      # Headless is always index 2: DP-1(0) + HDMI-A-1(1) are created before reload,
-      # headless is created after — so Sunshine always sees it as monitor index 2.
-      sed -i "s|^output_name = .*|output_name = 2|" "$SUNSHINE_CONF"
-      systemctl --user restart sunshine.service 2>/dev/null || true
-      print_success "Sunshine redirected to $headless_name (index 2)"
-    else
-      print_error "Could not detect headless output name"
-    fi
-
-  elif [ "$current" = "ipad" ]; then
-    # Restore Sunshine to stream HDMI-A-1 (index 1)
-    sed -i "s|^output_name = .*|output_name = 1|" "$SUNSHINE_CONF"
-    systemctl --user restart sunshine.service 2>/dev/null || true
-    print_success "Sunshine restored to HDMI-A-1 (index 1)"
+    _setup_ipad_headless
   fi
 
   # 5. Restart waybar (monitor layout changed)
